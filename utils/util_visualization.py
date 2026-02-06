@@ -3,17 +3,35 @@ import torch
 from matplotlib import pyplot as plt
 
 
-def visualize_loss_curve(configs, train_loss_history, test_loss_history):
-    plt.figure(figsize=(8, 6))
-    plt.plot(train_loss_history, label='Training Loss')
-    plt.plot(test_loss_history, label='Test Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.title('Training and Test Loss over Epochs')
-    plt.legend()
-    plt.grid()
-    plt.savefig(os.path.join("output", configs["task_name"], "visualization", "loss_curve.png"))
-    plt.close()
+def visualize_loss_curve(configs, loss_history1, loss_history2,
+                         name1="Train Loss", name2="Test Loss"):
+    
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5)) 
+
+    axes[0].plot(loss_history1)
+    axes[0].set_title(name1)
+    axes[0].set_xlabel("Epochs")
+    axes[0].set_ylabel("Loss")
+    axes[0].grid()
+
+    axes[1].plot(loss_history2)
+    axes[1].set_title(name2)
+    axes[1].set_xlabel("Epochs")
+    axes[1].set_ylabel("Loss")
+    axes[1].grid()
+
+    plt.tight_layout()
+
+    save_path = os.path.join(
+        "output",
+        configs["task_name"],
+        "visualization",
+        "loss_curve.png"
+    )
+
+    plt.savefig(save_path)
+    print("Loss Curve 저장 완료:", save_path)
+    plt.close
 
 
 def visualize_generated_samples(model, configs, device, epoch=None):    

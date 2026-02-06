@@ -1,6 +1,5 @@
 import torch.nn as nn
 
-
 class VanillaGAN(nn.Module):
     def __init__(self, generator, discriminator):
         super(VanillaGAN, self).__init__()
@@ -10,7 +9,6 @@ class VanillaGAN(nn.Module):
     def forward(self, z):
         generated_data = self.netG(z)
         return generated_data
-    
 
 class Generator(nn.Module):
     def __init__(self, out_channels=3, latent_dim=100, img_size=32):
@@ -34,17 +32,24 @@ class Generator(nn.Module):
         
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh() 
+        
+        self.apply(self._init_weights) 
           
-    
     def forward(self, z):
         x = self.fc(z)
         x = x.view(x.size(0), 256, self.feat_size, self.feat_size)
-        
         x = self.relu(self.bn1(self.deconv1(x))) 
         x = self.relu(self.bn2(self.deconv2(x)))
         x = self.tanh(self.deconv3(x))           
-        
         return x
+
+    def _init_weights(self, m):
+        classname = m.__class__.__name__
+        if 'Conv' in classname:
+            nn.init.normal_(m.weight.data, 0.0, 0.02)
+        elif 'BatchNorm' in classname:
+            nn.init.normal_(m.weight.data, 1.0, 0.02)
+            nn.init.constant_(m.bias.data, 0)
 
 
 class Discriminator(nn.Module):
@@ -62,16 +67,26 @@ class Discriminator(nn.Module):
         self.conv3 = nn.Conv2d(128, 256, 4, stride=2, padding=1)
         self.bn3 = nn.BatchNorm2d(256) 
         # 4x4 -> 1x1 (진짜/가짜 스칼라값)
-        self.final_conv = nn.Conv2d(256, 1, 4, stride=1, padding=0)
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Linear(256, 1)
         
         self.leaky_relu = nn.LeakyReLU(0.2)
         
+        self.apply(self._init_weights)
+
     def forward(self, x):
         x = self.leaky_relu(self.conv1(x))
-        x = self.leaky_relu(self.bn2(self.conv2(x))) # Conv -> BN -> LeakyReLU
+        x = self.leaky_relu(self.bn2(self.conv2(x))) 
         x = self.leaky_relu(self.bn3(self.conv3(x)))
-        x = self.final_conv(x)
-        
-        x = x.view(-1, 1).squeeze(1)
-        
+        x = self.global_pool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x).squeeze(1)
         return x 
+
+    def _init_weights(self, m):
+        classname = m.__class__.__name__
+        if 'Conv' in classname:
+            nn.init.normal_(m.weight.data, 0.0, 0.02)
+        elif 'BatchNorm' in classname:
+            nn.init.normal_(m.weight.data, 1.0, 0.02)
+            nn.init.constant_(m.bias.data, 0)

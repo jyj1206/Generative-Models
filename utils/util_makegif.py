@@ -1,7 +1,7 @@
 import torch
 import os
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from torchvision.utils import make_grid
 
 
@@ -18,31 +18,43 @@ class TrainingProcessRecorder:
         # 프레임(이미지)들을 저장할 리스트
         self.frames = []
 
-    def record_frame(self, model):
-        """현재 모델 상태로 이미지를 생성하여 프레임에 추가"""
+    def record_frame(self, model, epoch):
+        """이미지 상단에 여백을 만들어 Epoch 정보를 표시"""
         with torch.no_grad():
-            # 1. 고정된 z로 이미지 생성
-            # VAE와 GAN 모두 호출 가능하도록 model()을 직접 호출
+            # 1. 이미지 생성 (기존 동일)
             generated = model(self.fixed_z)
-            
-            # 2. Activation에 따른 범위 복구 (-1~1 -> 0~1)
-            # configs["model"]인지 configs["train"]인지 본인 yaml에 맞게 확인 필수!
             if self.configs['model']['activation'] == 'tanh':
                 generated = (generated + 1) / 2
-            
-            # 3. 0~1 사이로 자르기
             generated = generated.clamp(0, 1)
             
-            # 4. 보기 좋게 그리드(4x4) 형태로 묶기
-            # make_grid는 텐서들을 이어붙여 하나의 큰 이미지로 만들어줍니다.
-            grid_img = make_grid(generated, nrow=int(np.sqrt(self.num_samples)), padding=2, normalize=False)
+            # 2. 그리드 만들기 (기존 동일)
+            grid_img = make_grid(generated, nrow=int(np.sqrt(self.num_samples)), padding=2)
             
-            # 5. Tensor(C, H, W) -> Numpy(H, W, C) -> uint8(0~255) 변환
-            # PIL Image로 변환하기 위한 전처리입니다.
+            # 3. Tensor -> PIL Image 변환 (기존 동일)
             ndarr = grid_img.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
             im = Image.fromarray(ndarr)
             
-            self.frames.append(im)
+
+            header_height = 25  # 텍스트가 들어갈 높이 (픽셀 단위)
+            width, height = im.size
+            
+            # 새로운 빈 캔버스 생성 (너비는 그대로, 높이는 헤더만큼 추가)
+            # 배경색은 검정(0, 0, 0)으로 설정 (흰색 원하면 (255, 255, 255))
+            new_im = Image.new('RGB', (width, height + header_height), (0, 0, 0))
+            
+            # 기존 그리드 이미지를 헤더 아래쪽(0, header_height) 좌표에 붙여넣기
+            new_im.paste(im, (0, header_height))
+            
+            # ---------------------------------------------------------
+            # [텍스트 그리기] 이제 이미지가 아닌 상단 여백에 그림
+            # ---------------------------------------------------------
+            draw = ImageDraw.Draw(new_im)
+            text = f"Epoch: {epoch}"
+            
+            # (5, 5) 위치는 이제 검은색 여백 위이므로 사진을 가리지 않음
+            draw.text((5, 5), text, fill=(255, 255, 255)) # 흰색 텍스트
+
+            self.frames.append(new_im)
 
     def save_gif(self, filename="training_process.gif", duration=100):
         """모아둔 프레임을 GIF로 저장"""
