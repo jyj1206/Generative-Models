@@ -1,5 +1,4 @@
 task: gan
-task_name: vanila_gan_cifar10
 
 model:
   type: vanila_gan

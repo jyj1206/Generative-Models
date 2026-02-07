@@ -1,5 +1,4 @@
 task: vae
-task_name: vanila_vae_mnist
 
 model:
   type: vanila_vae

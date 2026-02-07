@@ -1,15 +1,20 @@
-from xml.parsers.expat import model
 import torch
 import os
 import argparse
 import yaml
-from models.build import build_model, build_loss_function, build_optimizer
+import copy
+
+from models.build import build_model, build_loss_function, build_optimizer, build_diffusion_scheduler
 from datasets.build import build_dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from utils.util_makegif import TrainingProcessRecorder
-from utils.util_visualization import visualize_generated_samples, visualize_reconstructions, visualize_loss_curve
-from utils.util_save import save_vae_model_checkpoint, save_gan_model_checkpoint
+
+from utils.util_makegif import TrainRecorder
+from utils.util_visualization import plot_samples, plot_loss
+from utils.util_visualization import plot_vae_recon, plot_diffusion_samples, run_sampling_plot
+from utils.util_save import save_vae_checkpoint, save_gan_checkpoint, save_diffusion_checkpoint
+from utils.util_ema import ema_update
+from utils.util_paths import build_output_dir
 
 
 def parse_args():
@@ -33,12 +38,17 @@ def main():
     configs = yaml_loader(args.config)
     
     task = configs["task"]
+
+    run_name = os.path.splitext(os.path.basename(args.config))[0]
+    configs["run_name"] = run_name
+    configs["output_dir"] = build_output_dir(configs, run_name)
+    output_dir = configs["output_dir"]
     
-    os.makedirs(os.path.join("output", configs["task_name"], "checkpoints"), exist_ok=True)
-    os.makedirs(os.path.join("output", configs["task_name"], "visualization", "train"), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "checkpoints"), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "visualization", "train"), exist_ok=True)
 
     if task == 'vae':
-        os.makedirs(os.path.join("output", configs["task_name"], "visualization", "test"), exist_ok=True)
+        os.makedirs(os.path.join(output_dir, "visualization", "test"), exist_ok=True)
 
     """
         Building dataset and dataloaders
@@ -65,9 +75,6 @@ def main():
     """
         Building model
     """
-    in_channels = int(configs["model"]['in_channels'])
-    img_size = int(configs["model"]['img_size'])
-
     model = build_model(configs)
     
     """
@@ -78,29 +85,51 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.train()
+    
     if task == 'vae':
         optimizer = build_optimizer(model, configs)
     elif task == 'gan':
         optimizer_G = build_optimizer(model.netG, configs)
         optimizer_D = build_optimizer(model.netD, configs)
-        
-    criterion = build_loss_function(configs)
+    elif task == 'diffusion':
+        optimizer = build_optimizer(model, configs)
+    else:
+        raise ValueError(f"Unsupported task: {task}")
+
+    if task != 'diffusion':
+        criterion = build_loss_function(configs)
+    else:
+        diffusion, num_timesteps = build_diffusion_scheduler(configs, device)
     
-    recorder = TrainingProcessRecorder(configs, device)
+    if task in ['vae', 'gan']:
+        recorder = TrainRecorder(configs, device)
+
+    
+    ema = configs['train'].get('ema', False)
+    if ema:
+        ema_decay = configs['train']['ema_decay']
+        ema_model = copy.deepcopy(model).to(device)
+        
+        for param in ema_model.parameters():
+            param.requires_grad = False
+
     
     train_loss_history = []
     test_loss_history = []
-    # For GAN training histories (keep across epochs)
+    
     loss_G_history = []
     loss_D_history = []
-        
+
+    iterations = 0
+    
     for epoch in range(1, num_epochs + 1):
         model.train()
 
-        train_loss_sum = 0.0
+        pbar = tqdm(train_dataloader, desc=f"Epoch [{epoch}/{num_epochs}]")
 
         if task == 'vae':
-            pbar = tqdm(train_dataloader, desc=f"Epoch [{epoch}/{num_epochs}]")
+            train_loss_sum = 0.0
+            
             for inputs, _ in pbar:
                 inputs = inputs.to(device)
                 
@@ -112,11 +141,10 @@ def main():
                 
                 train_loss_sum += loss.item()
 
-                # `loss.item()` is already a scalar for the batch; show it directly
-                batch_avg_loss = loss.item()
-                pbar.set_postfix({'loss': f"{batch_avg_loss:.4f}"})
+                iterations += 1
+                
+                pbar.set_postfix({'loss': f"{loss.item():.4f}, iter': {iterations}"})
             
-            # average per-batch loss
             avg_train_loss = train_loss_sum / len(train_dataloader.dataset)
             train_loss_history.append(avg_train_loss)
         
@@ -142,18 +170,15 @@ def main():
             
 
             if epoch % 10 == 0:            
-                visualize_reconstructions(model, configs, train_dataloader, device, epoch, train=True)
-                visualize_reconstructions(model, configs, test_dataloader, device, epoch, train=False)
+                plot_vae_recon(model, configs, train_dataloader, device, epoch, train=True)
+                plot_vae_recon(model, configs, test_dataloader, device, epoch, train=False)
                 
-                save_vae_model_checkpoint(model, optimizer, avg_train_loss, configs, epoch=epoch)
+                save_vae_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations)
  
         elif task == 'gan':
             loss_D_sum = 0.0
             loss_G_sum = 0.0
-            netG = model.netG
-            netD = model.netD
 
-            pbar = tqdm(train_dataloader, desc=f"Epoch [{epoch}/{num_epochs}]")
             for real_images, _ in pbar:
                 real_images = real_images.to(device)
                 batch_size = real_images.size(0)
@@ -161,13 +186,13 @@ def main():
                 # Train Discriminator
                 optimizer_D.zero_grad()
                 
-                z = torch.randn(batch_size, netG.latent_dim).to(device)
-                fake_images = netG(z)
+                z = torch.randn(batch_size, model.netG.latent_dim).to(device)
+                fake_images = model.netG(z)
                 label_real = torch.ones(batch_size).to(device) * 0.9
                 label_fake = torch.zeros(batch_size).to(device)
                 
-                output_real = netD(real_images)
-                output_fake = netD(fake_images.detach()) # Generator no update
+                output_real = model.netD(real_images)
+                output_fake = model.netD(fake_images.detach()) # Generator no update
                 
                 loss_D_real = criterion(output_real, label_real)
                 loss_D_fake = criterion(output_fake, label_fake)
@@ -179,7 +204,7 @@ def main():
                 # Train Generator
                 optimizer_G.zero_grad()
                 
-                output = netD(fake_images)
+                output = model.netD(fake_images)
                 
                 loss_G = criterion(output, label_real) # Trick: want fake to be real
                 loss_G.backward()
@@ -188,8 +213,10 @@ def main():
                 loss_D_sum += loss_D.item()
                 loss_G_sum += loss_G.item()
                 
-                pbar.set_postfix({'loss_D': f"{loss_D.item():.4f}", 'loss_G': f"{loss_G.item():.4f}"})
-        
+                iterations += 1
+                
+                pbar.set_postfix({'loss_D': f"{loss_D.item():.4f}", 'loss_G': f"{loss_G.item():.4f}, iter': {iterations}"})
+                
             avg_loss_D = loss_D_sum / len(train_dataloader)
             avg_loss_G = loss_G_sum / len(train_dataloader)
 
@@ -200,21 +227,66 @@ def main():
             recorder.record_frame(model.netG, epoch)
             
             if epoch % 10 == 0:  
-                visualize_generated_samples(netG, configs, device, epoch=epoch)           
-                save_gan_model_checkpoint(model, optimizer_G, optimizer_D, avg_loss_G, avg_loss_D, configs, epoch=epoch)
+                plot_samples(model.netG, configs, device, epoch=epoch)           
+                save_gan_checkpoint(model, optimizer_G, optimizer_D, avg_loss_G, avg_loss_D, configs, epoch, iterations)
  
-    recorder.save_gif()
+        elif task == 'diffusion':
+            train_loss_sum = 0.0
+            
+            for inputs, _ in pbar:
+                inputs = inputs.to(device)
+                
+                optimizer.zero_grad()
+
+                t = torch.randint(0, num_timesteps, (inputs.size(0),), device=device).long()
+                
+                loss = diffusion.p_losses(model, inputs, t)
+                
+                loss.backward()
+                optimizer.step()
+                
+                if configs['train']['ema']:
+                    ema_update(model, ema_model, ema_decay)
+                
+                train_loss_sum += loss.item()
+                
+                iterations += 1
+                
+                pbar.set_postfix({'loss': f"{loss.item():.4f}, iter': {iterations}"})
+                
+            avg_train_loss = train_loss_sum / len(train_dataloader)
+            train_loss_history.append(avg_train_loss)
+            print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.4f}")
+            
+            if iterations % 1000 == 0:
+                save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if configs['train']['ema'] else None)
+            
+
+    if task in ['vae', 'gan']:
+        recorder.save_gif()
     
     model.eval()
     if task == 'vae':
-        visualize_generated_samples(model.decoder, configs, device)
-        visualize_reconstructions(model, configs, test_dataloader, device)
-        visualize_loss_curve(configs, train_loss_history, test_loss_history)
-        save_vae_model_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, final=True)
+        plot_samples(model.decoder, configs, device)
+        
+        plot_vae_recon(model, configs, test_dataloader, device)
+        
+        plot_loss(configs, train_loss_history, test_loss_history)
+        save_vae_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True)
+    
     elif task == 'gan':
-        visualize_generated_samples(model.netG, configs, device)
-        visualize_loss_curve(configs, loss_G_history, loss_D_history, "Geneartor Loss", "Discriminator Loss")
-        save_gan_model_checkpoint(model, optimizer_G, optimizer_D, avg_loss_G, avg_loss_D, configs, num_epochs, final=True)
+        plot_samples(model.netG, configs, device)
+        
+        plot_loss(configs, loss_G_history, loss_D_history, "Geneartor Loss", "Discriminator Loss")
+        save_gan_checkpoint(model, optimizer_G, optimizer_D, avg_loss_G, avg_loss_D, configs, num_epochs, iterations, final=True)
+    
+    elif task == 'diffusion':
+        plot_diffusion_samples(ema_model if ema else model, configs, diffusion)
+        run_sampling_plot(ema_model if ema else model, diffusion, configs, num_samples=16, capture_interval=20)
+        
+        plot_loss(configs, train_loss_history)
+        save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True, ema_model=ema_model if ema else None)
+    
     
 if __name__ == "__main__":
     main()

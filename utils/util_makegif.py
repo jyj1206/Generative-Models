@@ -3,9 +3,10 @@ import os
 import numpy as np
 from PIL import Image, ImageDraw
 from torchvision.utils import make_grid
+from utils.util_paths import get_output_dir
 
 
-class TrainingProcessRecorder:
+class TrainRecorder:
     def __init__(self, configs, device, num_samples=16):
         self.configs = configs
         self.device = device
@@ -62,7 +63,8 @@ class TrainingProcessRecorder:
             print("저장할 프레임이 없습니다.")
             return
             
-        save_path = os.path.join("output", self.configs["task_name"], "visualization", filename)
+        output_dir = get_output_dir(self.configs)
+        save_path = os.path.join(output_dir, "visualization", filename)
         
         # 첫 번째 이미지를 기준으로 나머지 이미지들을 붙여서 저장
         self.frames[0].save(
@@ -74,3 +76,82 @@ class TrainingProcessRecorder:
             loop=0
         )
         print(f"GIF 저장 완료: {save_path}")
+        
+        
+import torch
+import os
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+from torchvision.utils import make_grid
+
+class SampleRecorder:
+    def __init__(self, configs, device, save_filename="sampling_process.gif"):
+        self.configs = configs
+        self.device = device
+        self.save_filename = save_filename
+        self.frames = []
+        
+        # 저장 경로 미리 생성
+        output_dir = get_output_dir(configs)
+        self.save_dir = os.path.join(output_dir, "visualization")
+        os.makedirs(self.save_dir, exist_ok=True)
+
+    def record_step(self, x_t, t):
+        """
+        x_t: 현재 시점 t의 이미지 텐서 (Batch, C, H, W) [-1, 1] 범위
+        t: 현재 타임스텝 (int)
+        """
+        # 1. 텐서 후처리: [-1, 1] -> [0, 1] -> [0, 255]
+        # 계산 비용을 줄이기 위해 no_grad 안에서 수행
+        with torch.no_grad():
+            x_t = (x_t + 1) / 2
+            x_t = x_t.clamp(0, 1)
+            
+            # 2. 그리드 만들기
+            # nrow는 배치 사이즈의 제곱근으로 설정 (예: 16장 -> 4x4)
+            grid = make_grid(x_t, nrow=int(np.sqrt(x_t.size(0))), padding=2)
+            
+            # 3. Tensor -> PIL Image 변환
+            ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
+            im = Image.fromarray(ndarr)
+
+            # 4. 상단 여백 추가 및 텍스트 작성
+            header_height = 30
+            width, height = im.size
+            new_im = Image.new('RGB', (width, height + header_height), (0, 0, 0))
+            new_im.paste(im, (0, header_height))
+            
+            draw = ImageDraw.Draw(new_im)
+            
+            # 텍스트: Diffusion Step T 표시 (Reverse Process이므로 T가 점점 줄어듦)
+            text = f"Step T: {t}"
+            
+            # (옵션) 폰트 설정 (기본 폰트 사용 시 생략 가능)
+            # font = ImageFont.truetype("arial.ttf", 20) 
+            
+            # 텍스트 그리기 (좌측 상단)
+            draw.text((10, 5), text, fill=(255, 255, 255)) 
+
+            self.frames.append(new_im)
+
+    def save_gif(self, duration=50, loop=0):
+        """
+        모아둔 프레임을 GIF로 저장
+        duration: 프레임 간 지연 시간 (ms) - 낮을수록 빠름
+        """
+        if not self.frames:
+            print("저장할 프레임이 없습니다.")
+            return
+
+        save_path = os.path.join(self.save_dir, self.save_filename)
+        
+        # 첫 번째 이미지를 기준으로 저장
+        self.frames[0].save(
+            save_path,
+            save_all=True,
+            append_images=self.frames[1:],
+            optimize=False,
+            duration=duration,
+            loop=loop
+        )
+        print(f"Sampling GIF 저장 완료: {save_path}")

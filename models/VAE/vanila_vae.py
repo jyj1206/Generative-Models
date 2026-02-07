@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torchinfo import summary
 
 
 class VanillaVAE(nn.Module):
@@ -81,3 +82,12 @@ class Decoder(nn.Module):
         x = self.activation(self.deconv3(x))
         
         return x
+    
+    
+if __name__ == "__main__":
+
+    encoder = Encoder(in_channels=3, latent_dim=128, img_size=32)
+    decoder = Decoder(out_channels=3, latent_dim=128, img_size=32, activation='sigmoid')
+    model = VanillaVAE(encoder, decoder, latent_dim=128)
+    
+    summary(model, input_size=(4, 3, 32, 32), depth=4)

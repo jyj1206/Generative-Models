@@ -1,4 +1,6 @@
 import torch.nn as nn
+from torchinfo import summary
+
 
 class VanillaGAN(nn.Module):
     def __init__(self, generator, discriminator):
@@ -9,6 +11,7 @@ class VanillaGAN(nn.Module):
     def forward(self, z):
         generated_data = self.netG(z)
         return generated_data
+
 
 class Generator(nn.Module):
     def __init__(self, out_channels=3, latent_dim=100, img_size=32):
@@ -66,6 +69,7 @@ class Discriminator(nn.Module):
         # 8x8 -> 4x4
         self.conv3 = nn.Conv2d(128, 256, 4, stride=2, padding=1)
         self.bn3 = nn.BatchNorm2d(256) 
+        
         # 4x4 -> 1x1 (진짜/가짜 스칼라값)
         self.global_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Linear(256, 1)
@@ -90,3 +94,16 @@ class Discriminator(nn.Module):
         elif 'BatchNorm' in classname:
             nn.init.normal_(m.weight.data, 1.0, 0.02)
             nn.init.constant_(m.bias.data, 0)
+            
+
+if __name__ == "__main__":  
+    latent_dim = 100
+    img_size = 32
+    in_channels = 3
+
+    generator = Generator(out_channels=in_channels, latent_dim=latent_dim, img_size=img_size)
+    discriminator = Discriminator(in_channels=in_channels)
+    model = VanillaGAN(generator, discriminator)
+
+    summary(model.netG, input_size=(4, latent_dim), depth=4)
+    summary(model.netD, input_size=(4, in_channels, img_size, img_size), depth=4)

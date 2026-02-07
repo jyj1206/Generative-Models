@@ -1,5 +1,7 @@
 import torch
 
+from models.Diffusion.diffusion_utils import linear_beta_schedule
+
 
 def build_model(configs):
     model_type = configs["model"]["type"]
@@ -24,6 +26,27 @@ def build_model(configs):
         discriminator = Discriminator(in_channels=in_channels)
         
         model = VanillaGAN(generator, discriminator)
+        
+    elif model_type == 'ddpm':
+        from models.Diffusion.ddpm import UNet
+        
+        in_channels = int(configs["model"]['in_channels'])
+        img_size = int(configs["model"]['img_size'])
+        dim = int(configs["model"]['dim'])
+        dim_mults = configs["model"]['dim_mults']
+        num_res_blocks = int(configs["model"].get("num_res_blocks", 2))
+        attn_layers = configs["model"].get("attn_layers", [])
+        
+        dropout = float(configs["model"].get("dropout", 0.0))
+        model = UNet(
+            dim=dim,
+            dim_mults=dim_mults,
+            attn_layers=attn_layers,
+            num_res_blocks=num_res_blocks,
+            dropout=dropout,
+            in_channels=in_channels,
+            image_size=img_size
+        )
     else:
         raise ValueError(f"Unknown model: {model_type}")
 
@@ -43,10 +66,14 @@ def build_loss_function(configs):
             loss_fn = vae_loss_function_bce
         else:
             raise ValueError(f"Unknown loss function: {loss_type}")
+        
     elif model_type == 'vanila_gan':
         if loss_type == 'bce':
             from models.GANs.gan_loss import vanila_gan_loss
             loss_fn = vanila_gan_loss()
+            
+    elif model_type == 'diffusion':
+        pass
     else:
         raise ValueError(f"Unknown model: {model_type}")
 
@@ -67,3 +94,27 @@ def build_optimizer(model, configs):
         raise ValueError(f"Unknown optimizer: {optim_type}")
 
     return optimizer
+
+
+def build_diffusion_scheduler(configs, device):
+    from models.Diffusion.diffusion_utils import GaussianDiffusion, linear_beta_schedule
+
+    beta_start = float(configs["diffusion"]['beta_start'])
+    beta_end = float(configs["diffusion"]['beta_end'])
+    num_timesteps = int(configs["diffusion"]['num_timesteps'])
+
+    betas = linear_beta_schedule(
+        timesteps=num_timesteps,
+        beta_start=beta_start,
+        beta_end=beta_end
+    )
+
+    variance_type = configs["diffusion"].get("variance_type", "fixed_small")
+    
+    diffusion = GaussianDiffusion(
+        betas=betas,
+        device=device,
+        variance_type=variance_type
+    )
+
+    return diffusion, num_timesteps

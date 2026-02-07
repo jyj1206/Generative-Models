@@ -1,5 +1,4 @@
 task: vae
-task_name: vanila_vae_cifar10
 
 model:
   type: vanila_vae
