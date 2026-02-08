@@ -23,7 +23,7 @@ def build_model(configs):
         img_size = int(configs["model"]["img_size"])
         
         generator = Generator(out_channels=in_channels, latent_dim=latent_dim, img_size=img_size)
-        discriminator = Discriminator(in_channels=in_channels)
+        discriminator = Discriminator(in_channels=in_channels, img_size=img_size)
         
         model = VanillaGAN(generator, discriminator)
         

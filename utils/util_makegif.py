@@ -77,23 +77,21 @@ class TrainRecorder:
         )
         print(f"GIF 저장 완료: {save_path}")
         
-        
-import torch
-import os
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-from torchvision.utils import make_grid
 
 class SampleRecorder:
-    def __init__(self, configs, device, save_filename="sampling_process.gif"):
+    def __init__(self, configs, device, save_filename="sampling_process.gif", save_dir=None, scale=1):
         self.configs = configs
         self.device = device
         self.save_filename = save_filename
         self.frames = []
+        self.scale = scale
         
         # 저장 경로 미리 생성
-        output_dir = get_output_dir(configs)
-        self.save_dir = os.path.join(output_dir, "visualization")
+        if save_dir is None:
+            output_dir = get_output_dir(configs)
+            self.save_dir = os.path.join(output_dir, "visualization")
+        else:
+            self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
 
     def record_step(self, x_t, t):
@@ -132,9 +130,14 @@ class SampleRecorder:
             # 텍스트 그리기 (좌측 상단)
             draw.text((10, 5), text, fill=(255, 255, 255)) 
 
+            if self.scale != 1:
+                new_width = int(new_im.size[0] * self.scale)
+                new_height = int(new_im.size[1] * self.scale)
+                new_im = new_im.resize((new_width, new_height), resample=Image.NEAREST)
+
             self.frames.append(new_im)
 
-    def save_gif(self, duration=50, loop=0):
+    def save_gif(self, duration=100, loop=0):
         """
         모아둔 프레임을 GIF로 저장
         duration: 프레임 간 지연 시간 (ms) - 낮을수록 빠름

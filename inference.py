@@ -2,9 +2,11 @@ import os
 import argparse
 import yaml
 import torch
-from matplotlib import pyplot as plt
 
 from models.build import build_model, build_diffusion_scheduler
+from utils.util_makegif import SampleRecorder
+from utils.util_paths import append_timestamp, get_timestamp
+from utils.util_visualization import save_grid_image, save_single_image
 
 
 def parse_args():
@@ -12,6 +14,15 @@ def parse_args():
     parser.add_argument('--model_path', type=str, required=True)
     parser.add_argument('--configs', type=str, required=True)
     parser.add_argument('--out_name', type=str, default='single_sample.png')
+    parser.add_argument('--scale', type=int, default=4)
+    rng_group = parser.add_mutually_exclusive_group()
+    rng_group.add_argument('--random', action='store_true')
+    rng_group.add_argument('--seed', type=int)
+    parser.add_argument('--diffusion_gif', action='store_true')
+    parser.add_argument('--gif_interval', type=int, default=10)
+    parser.add_argument('--gif_duration', type=int, default=50)
+    parser.add_argument('--gif_name', type=str, default='sampling_process.gif')
+    parser.add_argument('--gif_final_name', type=str, default='sampling_final.png')
     args = parser.parse_args()
     return args
 
@@ -59,17 +70,28 @@ def sample_one(model, configs, device, diffusion=None):
     return sample.clamp(0, 1).cpu()
 
 
-def save_sample(sample, save_path):
-    img = sample[0].permute(1, 2, 0).squeeze()
-    plt.figure(figsize=(3, 3))
-    if img.ndim == 2:
-        plt.imshow(img, cmap="gray")
-    else:
-        plt.imshow(img)
-    plt.axis("off")
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close()
+def save_diffusion_gif(model, diffusion, configs, save_dir, filename, final_name=None, capture_interval=200, duration=100, scale=1):
+    device = diffusion.betas.device
+    num_samples = 16
+    img_size = int(configs["model"]["img_size"])
+    channels = int(configs["model"]["in_channels"])
+
+    recorder = SampleRecorder(configs, device=device, save_filename=filename, save_dir=save_dir, scale=scale)
+    img = torch.randn((num_samples, channels, img_size, img_size), device=device)
+
+    with torch.no_grad():
+        total_steps = len(diffusion.betas)
+        for i in reversed(range(total_steps)):
+            t = torch.full((num_samples,), i, device=device, dtype=torch.long)
+            img = diffusion.p_sample(model, img, t)
+            if i % capture_interval == 0 or i == 0:
+                recorder.record_step(img, t=i)
+
+    recorder.save_gif(duration=duration)
+
+    if final_name is not None:
+        final_path = os.path.join(save_dir, final_name)
+        save_grid_image(img, final_path, scale=scale, normalize=True)
 
 
 def main():
@@ -80,22 +102,41 @@ def main():
     model_dir = os.path.dirname(os.path.abspath(args.model_path))
     output_dir = os.path.dirname(model_dir)
     configs["output_dir"] = output_dir
-    os.makedirs(os.path.join(output_dir, "inference"), exist_ok=True)
+    inference_dir = os.path.join(output_dir, "inference")
+    os.makedirs(inference_dir, exist_ok=True)
     model = build_model(configs)
 
     load_checkpoint(model, args.model_path, device)
     model.to(device)
-    
-    torch.manual_seed(42)
+
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
 
     diffusion = None
     if configs["task"] == "diffusion":
         diffusion, _ = build_diffusion_scheduler(configs, device)
 
+    timestamp = get_timestamp()
     sample = sample_one(model, configs, device, diffusion=diffusion)
-    save_path = os.path.join(output_dir, "inference", args.out_name)
-    save_sample(sample, save_path)
+    save_path = os.path.join(inference_dir, append_timestamp(args.out_name, timestamp))
+    img_size = int(configs["model"]["img_size"])
+    save_single_image(sample, save_path, img_size, scale=args.scale)
     print(f"Saved single sample: {save_path}")
+
+    if configs["task"] == "diffusion" and args.diffusion_gif:
+        gif_name = append_timestamp(args.gif_name, timestamp)
+        final_name = append_timestamp(args.gif_final_name, timestamp)
+        save_diffusion_gif(
+            model,
+            diffusion,
+            configs,
+            save_dir=inference_dir,
+            filename=gif_name,
+            final_name=final_name,
+            capture_interval=args.gif_interval,
+            duration=args.gif_duration,
+            scale=args.scale
+        )
 
 
 if __name__ == "__main__":

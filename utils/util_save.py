@@ -44,6 +44,7 @@ def save_diffusion_checkpoint(model, optimizer, loss, configs, epoch, iterations
         ema_checkpoint_path = checkpoint_path.replace(".pth", "_ema.pth")
         torch.save({
             'epoch': epoch,
+            'iterations': iterations,
             'model_state_dict': ema_model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'loss': loss,
@@ -51,6 +52,7 @@ def save_diffusion_checkpoint(model, optimizer, loss, configs, epoch, iterations
     
     torch.save({
         'epoch': epoch,
+        'iterations': iterations,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'loss': loss,

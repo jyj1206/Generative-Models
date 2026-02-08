@@ -1,11 +1,45 @@
 import os
 import torch
 from matplotlib import pyplot as plt
+from PIL import Image
+from torchvision.utils import make_grid
 from utils.util_makegif import SampleRecorder
 from utils.util_paths import get_output_dir
 
 
-def plot_loss(configs, loss_history1, loss_history2=None,
+def save_single_image(sample, save_path, img_size, scale=1):
+    img = sample[0].permute(1, 2, 0).squeeze()
+    base = max(1.0, img_size / 32.0)
+    fig_scale = base * max(1, scale)
+    plt.figure(figsize=(6 * fig_scale, 6 * fig_scale))
+    if img.ndim == 2:
+        plt.imshow(img, cmap="gray")
+    else:
+        plt.imshow(img)
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+
+def save_grid_image(x_t, save_path, scale=1, normalize=True):
+    if normalize:
+        x_t = (x_t + 1) / 2
+    x_t = x_t.clamp(0, 1)
+    nrow = int((x_t.size(0)) ** 0.5)
+    grid = make_grid(x_t, nrow=nrow, padding=2)
+    ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
+    im = Image.fromarray(ndarr)
+
+    if scale != 1:
+        new_width = int(im.size[0] * scale)
+        new_height = int(im.size[1] * scale)
+        im = im.resize((new_width, new_height), resample=Image.NEAREST)
+
+    im.save(save_path)
+
+
+def save_loss_curve(configs, loss_history1, loss_history2=None,
                          name1="Train Loss", name2="Test Loss"):
     
     has_second_loss = loss_history2 is not None and len(loss_history2) > 0
@@ -42,7 +76,7 @@ def plot_loss(configs, loss_history1, loss_history2=None,
     plt.close() 
 
 
-def plot_samples(model, configs, device, epoch=None):    
+def save_latent_samples_grid(model, configs, device, epoch=None):    
     with torch.no_grad():
         z = torch.randn(16, model.latent_dim).to(device)
         samples = model(z)
@@ -51,28 +85,18 @@ def plot_samples(model, configs, device, epoch=None):
             samples = (samples + 1) / 2  # Convert from [-1, 1] to [0, 1]
         
         samples = samples.clamp(0, 1).cpu()
-        
-        _, axes = plt.subplots(4, 4, figsize=(6, 6))
-        for i, ax in enumerate(axes.flatten()):
-            img = samples[i].permute(1, 2, 0).squeeze()
-            if img.shape[-1] == 3:
-                ax.imshow(img)
-            else:
-                ax.imshow(img, cmap='gray')
-            ax.axis('off')
-        plt.tight_layout()
-        
+
         if epoch is None:
             output_dir = get_output_dir(configs)
-            plt.savefig(os.path.join(output_dir, "visualization", f"reconstructions_final.png"))
+            save_path = os.path.join(output_dir, "visualization", "reconstructions_final.png")
         else:
             output_dir = get_output_dir(configs)
-            plt.savefig(os.path.join(output_dir, "visualization", "train", f"generated_samples_epoch_{epoch}.png" if epoch else "final_generated_samples.png"))
-        
-        plt.close() 
+            save_path = os.path.join(output_dir, "visualization", "train", f"generated_samples_epoch_{epoch}.png" if epoch else "final_generated_samples.png")
+
+        save_grid_image(samples, save_path, normalize=False)
 
 
-def plot_vae_recon(model, configs, dataloader, device, epoch=None, train=False):    
+def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=False):    
     with torch.no_grad():
         data_iter = iter(dataloader)
         images, _ = next(data_iter)
@@ -106,41 +130,33 @@ def plot_vae_recon(model, configs, dataloader, device, epoch=None, train=False):
                 axes[1, i].title.set_text("Reconstruction")
         plt.tight_layout()
         
+        output_dir = get_output_dir(configs)
+        
         if epoch is None:
-            output_dir = get_output_dir(configs)
             plt.savefig(os.path.join(output_dir, "visualization", f"reconstructions_final.png"))
         else:
-            output_dir = get_output_dir(configs)
             plt.savefig(os.path.join(output_dir, "visualization", "train" if train else "test", f"reconstructions_epoch_{epoch}.png"))
         
         plt.close()
         
 
-def plot_diffusion_samples(model, configs, diffusion):    
+def save_diffusion_samples_grid(model, configs, diffusion, epoch=None):    
     with torch.no_grad():
         sample_shape = (16, configs["model"]['in_channels'], configs["model"]['img_size'], configs["model"]['img_size'])
         samples = diffusion.p_sample_loop(model, shape=sample_shape)
-        
-        samples = (samples + 1) / 2
-        samples = samples.clamp(0, 1).cpu()
-        
-        _, axes = plt.subplots(4, 4, figsize=(6, 6))
-        for i, ax in enumerate(axes.flatten()):
-            img = samples[i].permute(1, 2, 0).squeeze()
-            if img.shape[-1] == 3:
-                ax.imshow(img)
-            else:
-                ax.imshow(img, cmap='gray')
-            ax.axis('off')
-        plt.tight_layout()
+        samples = samples.cpu()
         
         output_dir = get_output_dir(configs)
-        plt.savefig(os.path.join(output_dir, "visualization", f"diffusion_generated_samples.png"))
         
-        plt.close()
+        if epoch is None:
+            save_path = os.path.join(output_dir, "visualization", "diffusion_generated_samples_final.png")
+        else:
+            save_path = os.path.join(output_dir, "visualization", "train", f"diffusion_generated_samples_epoch_{epoch}.png")
+
+        save_grid_image(samples, save_path, normalize=True)
         
 
-def run_sampling_plot(model, diffusion, configs, num_samples=16, capture_interval=20):
+def save_diffusion_sampling_gif(model, diffusion, configs, num_samples=16, capture_interval=20):
     model.eval()
     device = diffusion.betas.device
     recorder = SampleRecorder(configs, device='cuda')
@@ -169,4 +185,6 @@ def run_sampling_plot(model, diffusion, configs, num_samples=16, capture_interva
                 
     # 4. Save GIF
     recorder.save_gif(duration=200)  # Adjust duration to control playback speed
+
+
 

@@ -12,7 +12,7 @@ dataset:
   root: ./data
 
 train:
-  epochs: 100
+  epochs: 200
   batch_size: 128
   num_workers: 4
   learning_rate: 0.0002

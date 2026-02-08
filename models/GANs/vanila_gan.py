@@ -22,15 +22,12 @@ class Generator(nn.Module):
         
         self.fc = nn.Linear(latent_dim, 256 * self.feat_size * self.feat_size)
         
-        # 4x4 -> 8x8
-        self.deconv1 = nn.ConvTranspose2d(256, 128, 4, stride=2, padding=1)
+        self.deconv1 = nn.ConvTranspose2d(256, 128, 4, stride=2, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(128) 
         
-        # 8x8 -> 16x16
-        self.deconv2 = nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1)
+        self.deconv2 = nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(64) 
         
-        # 16x16 -> 32x32
         self.deconv3 = nn.ConvTranspose2d(64, out_channels, 4, stride=2, padding=1)
         
         self.relu = nn.ReLU()
@@ -56,36 +53,32 @@ class Generator(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, in_channels=3):
+    def __init__(self, in_channels=3, img_size=32): 
         super(Discriminator, self).__init__()
         
-        # 32x32 -> 16x16
         self.conv1 = nn.Conv2d(in_channels, 64, 4, stride=2, padding=1)
         
-        # 16x16 -> 8x8
-        self.conv2 = nn.Conv2d(64, 128, 4, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(64, 128, 4, stride=2, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(128) 
         
-        # 8x8 -> 4x4
-        self.conv3 = nn.Conv2d(128, 256, 4, stride=2, padding=1)
+        self.conv3 = nn.Conv2d(128, 256, 4, stride=2, padding=1, bias=False)
         self.bn3 = nn.BatchNorm2d(256) 
         
-        # 4x4 -> 1x1 (진짜/가짜 스칼라값)
-        self.global_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Linear(256, 1)
+        ds_size = img_size // 8 
+        
+        self.fc = nn.Linear(256 * ds_size * ds_size, 1)
         
         self.leaky_relu = nn.LeakyReLU(0.2)
-        
         self.apply(self._init_weights)
 
     def forward(self, x):
         x = self.leaky_relu(self.conv1(x))
         x = self.leaky_relu(self.bn2(self.conv2(x))) 
         x = self.leaky_relu(self.bn3(self.conv3(x)))
-        x = self.global_pool(x)
-        x = x.view(x.size(0), -1)
+        
+        x = x.view(x.size(0), -1) # Flatten
         x = self.fc(x).squeeze(1)
-        return x 
+        return x
 
     def _init_weights(self, m):
         classname = m.__class__.__name__
@@ -102,7 +95,7 @@ if __name__ == "__main__":
     in_channels = 3
 
     generator = Generator(out_channels=in_channels, latent_dim=latent_dim, img_size=img_size)
-    discriminator = Discriminator(in_channels=in_channels)
+    discriminator = Discriminator(in_channels=in_channels, img_size=img_size)
     model = VanillaGAN(generator, discriminator)
 
     summary(model.netG, input_size=(4, latent_dim), depth=4)

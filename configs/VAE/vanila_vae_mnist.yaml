@@ -15,8 +15,8 @@ train:
   epochs: 100
   batch_size: 128
   num_workers: 4
-  learning_rate: 1e-3
-  weight_decay: 1e-5
+  learning_rate: 0.001
+  weight_decay: 0.00001
   loss_fn: bce
   optimizer: adam
 

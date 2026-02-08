@@ -10,8 +10,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from utils.util_makegif import TrainRecorder
-from utils.util_visualization import plot_samples, plot_loss
-from utils.util_visualization import plot_vae_recon, plot_diffusion_samples, run_sampling_plot
+from utils.util_visualization import save_latent_samples_grid, save_loss_curve
+from utils.util_visualization import save_vae_recon_grid, save_diffusion_samples_grid, save_diffusion_sampling_gif
 from utils.util_save import save_vae_checkpoint, save_gan_checkpoint, save_diffusion_checkpoint
 from utils.util_ema import ema_update
 from utils.util_paths import build_output_dir
@@ -170,8 +170,8 @@ def main():
             
 
             if epoch % 10 == 0:            
-                plot_vae_recon(model, configs, train_dataloader, device, epoch, train=True)
-                plot_vae_recon(model, configs, test_dataloader, device, epoch, train=False)
+                save_vae_recon_grid(model, configs, train_dataloader, device, epoch, train=True)
+                save_vae_recon_grid(model, configs, test_dataloader, device, epoch, train=False)
                 
                 save_vae_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations)
  
@@ -227,7 +227,7 @@ def main():
             recorder.record_frame(model.netG, epoch)
             
             if epoch % 10 == 0:  
-                plot_samples(model.netG, configs, device, epoch=epoch)           
+                save_latent_samples_grid(model.netG, configs, device, epoch=epoch)
                 save_gan_checkpoint(model, optimizer_G, optimizer_D, avg_loss_G, avg_loss_D, configs, epoch, iterations)
  
         elif task == 'diffusion':
@@ -258,7 +258,8 @@ def main():
             train_loss_history.append(avg_train_loss)
             print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.4f}")
             
-            if iterations % 1000 == 0:
+            if epoch % 25 == 0:
+                save_diffusion_samples_grid(ema_model if ema else model, configs, diffusion, epoch=epoch)
                 save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if configs['train']['ema'] else None)
             
 
@@ -267,24 +268,24 @@ def main():
     
     model.eval()
     if task == 'vae':
-        plot_samples(model.decoder, configs, device)
+        save_latent_samples_grid(model.decoder, configs, device)
         
-        plot_vae_recon(model, configs, test_dataloader, device)
+        save_vae_recon_grid(model, configs, test_dataloader, device)
         
-        plot_loss(configs, train_loss_history, test_loss_history)
+        save_loss_curve(configs, train_loss_history, test_loss_history)
         save_vae_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True)
     
     elif task == 'gan':
-        plot_samples(model.netG, configs, device)
+        save_latent_samples_grid(model.netG, configs, device)
         
-        plot_loss(configs, loss_G_history, loss_D_history, "Geneartor Loss", "Discriminator Loss")
+        save_loss_curve(configs, loss_G_history, loss_D_history, "Geneartor Loss", "Discriminator Loss")
         save_gan_checkpoint(model, optimizer_G, optimizer_D, avg_loss_G, avg_loss_D, configs, num_epochs, iterations, final=True)
     
     elif task == 'diffusion':
-        plot_diffusion_samples(ema_model if ema else model, configs, diffusion)
-        run_sampling_plot(ema_model if ema else model, diffusion, configs, num_samples=16, capture_interval=20)
+        save_diffusion_samples_grid(ema_model if ema else model, configs, diffusion)
+        save_diffusion_sampling_gif(ema_model if ema else model, diffusion, configs, num_samples=16, capture_interval=20)
         
-        plot_loss(configs, train_loss_history)
+        save_loss_curve(configs, train_loss_history)
         save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True, ema_model=ema_model if ema else None)
     
     
