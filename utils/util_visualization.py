@@ -1,42 +1,50 @@
 import os
+import cv2
+import numpy as np
 import torch
 from matplotlib import pyplot as plt
-from PIL import Image
 from torchvision.utils import make_grid
 from utils.util_makegif import SampleRecorder
 from utils.util_paths import get_output_dir
 
 
-def save_single_image(sample, save_path, img_size, scale=1):
-    img = sample[0].permute(1, 2, 0).squeeze()
-    base = max(1.0, img_size / 32.0)
-    fig_scale = base * max(1, scale)
-    plt.figure(figsize=(6 * fig_scale, 6 * fig_scale))
+def save_single_image(sample, save_path, scale=4):
+    img = sample[0].permute(1, 2, 0).squeeze().clamp(0, 1).cpu().numpy()
+
     if img.ndim == 2:
-        plt.imshow(img, cmap="gray")
-    else:
-        plt.imshow(img)
-    plt.axis("off")
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close()
+        ndarr = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
+        if scale != 1:
+            new_width = int(ndarr.shape[1] * scale)
+            new_height = int(ndarr.shape[0] * scale)
+            ndarr = cv2.resize(ndarr, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
+        cv2.imwrite(save_path, ndarr)
+        return
+
+    ndarr = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
+    if scale != 1:
+        new_width = int(ndarr.shape[1] * scale)
+        new_height = int(ndarr.shape[0] * scale)
+        ndarr = cv2.resize(ndarr, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
+
+    bgr = cv2.cvtColor(ndarr, cv2.COLOR_RGB2BGR)
+    cv2.imwrite(save_path, bgr)
 
 
-def save_grid_image(x_t, save_path, scale=1, normalize=True):
+def save_grid_image(x_t, save_path, scale=4, normalize=True):
     if normalize:
         x_t = (x_t + 1) / 2
     x_t = x_t.clamp(0, 1)
     nrow = int((x_t.size(0)) ** 0.5)
     grid = make_grid(x_t, nrow=nrow, padding=2)
     ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
-    im = Image.fromarray(ndarr)
 
     if scale != 1:
-        new_width = int(im.size[0] * scale)
-        new_height = int(im.size[1] * scale)
-        im = im.resize((new_width, new_height), resample=Image.NEAREST)
+        new_width = int(ndarr.shape[1] * scale)
+        new_height = int(ndarr.shape[0] * scale)
+        ndarr = cv2.resize(ndarr, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
 
-    im.save(save_path)
+    bgr = cv2.cvtColor(ndarr, cv2.COLOR_RGB2BGR)
+    cv2.imwrite(save_path, bgr)
 
 
 def save_loss_curve(configs, loss_history1, loss_history2=None,
@@ -76,7 +84,7 @@ def save_loss_curve(configs, loss_history1, loss_history2=None,
     plt.close() 
 
 
-def save_latent_samples_grid(model, configs, device, epoch=None):    
+def save_latent_samples_grid(model, configs, device, epoch=None, scale=4):    
     with torch.no_grad():
         z = torch.randn(16, model.latent_dim).to(device)
         samples = model(z)
@@ -93,10 +101,10 @@ def save_latent_samples_grid(model, configs, device, epoch=None):
             output_dir = get_output_dir(configs)
             save_path = os.path.join(output_dir, "visualization", "train", f"generated_samples_epoch_{epoch}.png" if epoch else "final_generated_samples.png")
 
-        save_grid_image(samples, save_path, normalize=False)
+        save_grid_image(samples, save_path, scale=scale, normalize=False)
 
 
-def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=False):    
+def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=False, scale=4):    
     with torch.no_grad():
         data_iter = iter(dataloader)
         images, _ = next(data_iter)
@@ -112,7 +120,8 @@ def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=Fa
         x = x.clamp(0, 1).cpu()
         x_hat = x_hat.clamp(0, 1).cpu()
         
-        _, axes = plt.subplots(2, 8, figsize=(12, 4))
+        fig_scale = max(1, scale)
+        _, axes = plt.subplots(2, 8, figsize=(12 * fig_scale, 4 * fig_scale))
         for i in range(8):
             if images.shape[1] == 3:
                 axes[0, i].imshow(x[i].permute(1, 2, 0))
@@ -140,7 +149,7 @@ def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=Fa
         plt.close()
         
 
-def save_diffusion_samples_grid(model, configs, diffusion, epoch=None):    
+def save_diffusion_samples_grid(model, configs, diffusion, epoch=None, scale=4):    
     with torch.no_grad():
         sample_shape = (16, configs["model"]['in_channels'], configs["model"]['img_size'], configs["model"]['img_size'])
         samples = diffusion.p_sample_loop(model, shape=sample_shape)
@@ -153,13 +162,13 @@ def save_diffusion_samples_grid(model, configs, diffusion, epoch=None):
         else:
             save_path = os.path.join(output_dir, "visualization", "train", f"diffusion_generated_samples_epoch_{epoch}.png")
 
-        save_grid_image(samples, save_path, normalize=True)
+        save_grid_image(samples, save_path, scale=scale, normalize=True)
         
 
-def save_diffusion_sampling_gif(model, diffusion, configs, num_samples=16, capture_interval=20):
+def save_diffusion_sampling_gif(model, diffusion, configs, num_samples=16, capture_interval=20, scale=4):
     model.eval()
     device = diffusion.betas.device
-    recorder = SampleRecorder(configs, device='cuda')
+    recorder = SampleRecorder(configs, device='cuda', scale=scale)
     
     # 1. Initialize noise (x_T)
     img_size = recorder.configs['model']['img_size']

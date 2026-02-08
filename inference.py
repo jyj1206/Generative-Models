@@ -70,7 +70,7 @@ def sample_one(model, configs, device, diffusion=None):
     return sample.clamp(0, 1).cpu()
 
 
-def save_diffusion_gif(model, diffusion, configs, save_dir, filename, final_name=None, capture_interval=200, duration=100, scale=1):
+def save_diffusion_gif(model, diffusion, configs, save_dir, filename, final_name=None, capture_interval=200, duration=100, scale=4):
     device = diffusion.betas.device
     num_samples = 16
     img_size = int(configs["model"]["img_size"])
@@ -119,8 +119,7 @@ def main():
     timestamp = get_timestamp()
     sample = sample_one(model, configs, device, diffusion=diffusion)
     save_path = os.path.join(inference_dir, append_timestamp(args.out_name, timestamp))
-    img_size = int(configs["model"]["img_size"])
-    save_single_image(sample, save_path, img_size, scale=args.scale)
+    save_single_image(sample, save_path, scale=args.scale)
     print(f"Saved single sample: {save_path}")
 
     if configs["task"] == "diffusion" and args.diffusion_gif:

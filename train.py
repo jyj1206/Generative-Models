@@ -20,6 +20,7 @@ from utils.util_paths import build_output_dir
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True)
+    parser.add_argument('--scale', type=int, default=4)
     args = parser.parse_args()
     return args
 
@@ -102,7 +103,7 @@ def main():
         diffusion, num_timesteps = build_diffusion_scheduler(configs, device)
     
     if task in ['vae', 'gan']:
-        recorder = TrainRecorder(configs, device)
+        recorder = TrainRecorder(configs, device, num_samples=16, scale=args.scale)
 
     
     ema = configs['train'].get('ema', False)
@@ -169,9 +170,10 @@ def main():
             print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.4f} | Test Loss: {avg_test_loss:.4f}")
             
 
-            if epoch % 10 == 0:            
-                save_vae_recon_grid(model, configs, train_dataloader, device, epoch, train=True)
-                save_vae_recon_grid(model, configs, test_dataloader, device, epoch, train=False)
+            if epoch % 20 == 0:            
+                save_latent_samples_grid(model.decoder, configs, device, epoch=epoch, scale=args.scale)
+                save_vae_recon_grid(model, configs, train_dataloader, device, epoch, train=True, scale=args.scale)
+                save_vae_recon_grid(model, configs, test_dataloader, device, epoch, train=False, scale=args.scale)
                 
                 save_vae_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations)
  
@@ -215,7 +217,7 @@ def main():
                 
                 iterations += 1
                 
-                pbar.set_postfix({'loss_D': f"{loss_D.item():.4f}", 'loss_G': f"{loss_G.item():.4f}, iter': {iterations}"})
+                pbar.set_postfix({'loss_D': f"{loss_D.item():.4f}", 'loss_G': f"{loss_G.item():.4f}", 'iter': f"{iterations}"})
                 
             avg_loss_D = loss_D_sum / len(train_dataloader)
             avg_loss_G = loss_G_sum / len(train_dataloader)
@@ -226,8 +228,8 @@ def main():
             print(f"Epoch [{epoch}/{num_epochs}] Done. | Loss D: {avg_loss_D:.4f} | Loss G: {avg_loss_G:.4f}")
             recorder.record_frame(model.netG, epoch)
             
-            if epoch % 10 == 0:  
-                save_latent_samples_grid(model.netG, configs, device, epoch=epoch)
+            if epoch % 25 == 0:  
+                save_latent_samples_grid(model.netG, configs, device, epoch=epoch, scale=args.scale)
                 save_gan_checkpoint(model, optimizer_G, optimizer_D, avg_loss_G, avg_loss_D, configs, epoch, iterations)
  
         elif task == 'diffusion':
@@ -252,14 +254,14 @@ def main():
                 
                 iterations += 1
                 
-                pbar.set_postfix({'loss': f"{loss.item():.4f}, iter': {iterations}"})
+                pbar.set_postfix({'loss': f"{loss.item():.4f}", 'iter': f"{iterations}"})
                 
             avg_train_loss = train_loss_sum / len(train_dataloader)
             train_loss_history.append(avg_train_loss)
             print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.4f}")
             
             if epoch % 25 == 0:
-                save_diffusion_samples_grid(ema_model if ema else model, configs, diffusion, epoch=epoch)
+                save_diffusion_samples_grid(ema_model if ema else model, configs, diffusion, epoch=epoch, scale=args.scale)
                 save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if configs['train']['ema'] else None)
             
 
@@ -268,22 +270,29 @@ def main():
     
     model.eval()
     if task == 'vae':
-        save_latent_samples_grid(model.decoder, configs, device)
+        save_latent_samples_grid(model.decoder, configs, device, scale=args.scale)
         
-        save_vae_recon_grid(model, configs, test_dataloader, device)
+        save_vae_recon_grid(model, configs, test_dataloader, device, scale=args.scale)
         
         save_loss_curve(configs, train_loss_history, test_loss_history)
         save_vae_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True)
     
     elif task == 'gan':
-        save_latent_samples_grid(model.netG, configs, device)
+        save_latent_samples_grid(model.netG, configs, device, scale=args.scale)
         
-        save_loss_curve(configs, loss_G_history, loss_D_history, "Geneartor Loss", "Discriminator Loss")
+        save_loss_curve(configs, loss_G_history, loss_D_history, "Generator Loss", "Discriminator Loss")
         save_gan_checkpoint(model, optimizer_G, optimizer_D, avg_loss_G, avg_loss_D, configs, num_epochs, iterations, final=True)
     
     elif task == 'diffusion':
-        save_diffusion_samples_grid(ema_model if ema else model, configs, diffusion)
-        save_diffusion_sampling_gif(ema_model if ema else model, diffusion, configs, num_samples=16, capture_interval=20)
+        save_diffusion_samples_grid(ema_model if ema else model, configs, diffusion, scale=args.scale)
+        save_diffusion_sampling_gif(
+            ema_model if ema else model,
+            diffusion,
+            configs,
+            num_samples=16,
+            capture_interval=20,
+            scale=args.scale
+        )
         
         save_loss_curve(configs, train_loss_history)
         save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True, ema_model=ema_model if ema else None)

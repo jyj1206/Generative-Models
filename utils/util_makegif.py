@@ -1,16 +1,18 @@
 import torch
 import os
 import numpy as np
-from PIL import Image, ImageDraw
+import cv2
+from PIL import Image
 from torchvision.utils import make_grid
 from utils.util_paths import get_output_dir
 
 
 class TrainRecorder:
-    def __init__(self, configs, device, num_samples=16):
+    def __init__(self, configs, device, num_samples=16, scale=4):
         self.configs = configs
         self.device = device
         self.num_samples = num_samples
+        self.scale = scale
         
         # [핵심] 처음에 고정된 노이즈(z)를 딱 한 번만 만듭니다.
         # 이 z를 계속 재사용해야 이미지가 서서히 변하는 과정을 볼 수 있습니다.
@@ -31,29 +33,36 @@ class TrainRecorder:
             # 2. 그리드 만들기 (기존 동일)
             grid_img = make_grid(generated, nrow=int(np.sqrt(self.num_samples)), padding=2)
             
-            # 3. Tensor -> PIL Image 변환 (기존 동일)
+            # 3. Tensor -> NumPy 변환
             ndarr = grid_img.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
-            im = Image.fromarray(ndarr)
-            
 
-            header_height = 25  # 텍스트가 들어갈 높이 (픽셀 단위)
-            width, height = im.size
-            
-            # 새로운 빈 캔버스 생성 (너비는 그대로, 높이는 헤더만큼 추가)
-            # 배경색은 검정(0, 0, 0)으로 설정 (흰색 원하면 (255, 255, 255))
-            new_im = Image.new('RGB', (width, height + header_height), (0, 0, 0))
-            
-            # 기존 그리드 이미지를 헤더 아래쪽(0, header_height) 좌표에 붙여넣기
-            new_im.paste(im, (0, header_height))
-            
-            # ---------------------------------------------------------
-            # [텍스트 그리기] 이제 이미지가 아닌 상단 여백에 그림
-            # ---------------------------------------------------------
-            draw = ImageDraw.Draw(new_im)
+            header_height = 25
+            new_im = cv2.copyMakeBorder(
+                ndarr,
+                header_height,
+                0,
+                0,
+                0,
+                borderType=cv2.BORDER_CONSTANT,
+                value=(0, 0, 0)
+            )
+
             text = f"Epoch: {epoch}"
-            
-            # (5, 5) 위치는 이제 검은색 여백 위이므로 사진을 가리지 않음
-            draw.text((5, 5), text, fill=(255, 255, 255)) # 흰색 텍스트
+            cv2.putText(
+                new_im,
+                text,
+                (5, 17),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA
+            )
+
+            if self.scale != 1:
+                new_width = int(new_im.shape[1] * self.scale)
+                new_height = int(new_im.shape[0] * self.scale)
+                new_im = cv2.resize(new_im, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
 
             self.frames.append(new_im)
 
@@ -67,10 +76,11 @@ class TrainRecorder:
         save_path = os.path.join(output_dir, "visualization", filename)
         
         # 첫 번째 이미지를 기준으로 나머지 이미지들을 붙여서 저장
-        self.frames[0].save(
+        pil_frames = [Image.fromarray(frame) for frame in self.frames]
+        pil_frames[0].save(
             save_path,
             save_all=True,
-            append_images=self.frames[1:],
+            append_images=pil_frames[1:],
             optimize=False,
             duration=duration, # 프레임당 머무는 시간 (ms)
             loop=0
@@ -79,7 +89,7 @@ class TrainRecorder:
         
 
 class SampleRecorder:
-    def __init__(self, configs, device, save_filename="sampling_process.gif", save_dir=None, scale=1):
+    def __init__(self, configs, device, save_filename="sampling_process.gif", save_dir=None, scale=4):
         self.configs = configs
         self.device = device
         self.save_filename = save_filename
@@ -109,31 +119,37 @@ class SampleRecorder:
             # nrow는 배치 사이즈의 제곱근으로 설정 (예: 16장 -> 4x4)
             grid = make_grid(x_t, nrow=int(np.sqrt(x_t.size(0))), padding=2)
             
-            # 3. Tensor -> PIL Image 변환
+            # 3. Tensor -> NumPy 변환
             ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
-            im = Image.fromarray(ndarr)
 
             # 4. 상단 여백 추가 및 텍스트 작성
             header_height = 30
-            width, height = im.size
-            new_im = Image.new('RGB', (width, height + header_height), (0, 0, 0))
-            new_im.paste(im, (0, header_height))
-            
-            draw = ImageDraw.Draw(new_im)
-            
-            # 텍스트: Diffusion Step T 표시 (Reverse Process이므로 T가 점점 줄어듦)
+            new_im = cv2.copyMakeBorder(
+                ndarr,
+                header_height,
+                0,
+                0,
+                0,
+                borderType=cv2.BORDER_CONSTANT,
+                value=(0, 0, 0)
+            )
+
             text = f"Step T: {t}"
-            
-            # (옵션) 폰트 설정 (기본 폰트 사용 시 생략 가능)
-            # font = ImageFont.truetype("arial.ttf", 20) 
-            
-            # 텍스트 그리기 (좌측 상단)
-            draw.text((10, 5), text, fill=(255, 255, 255)) 
+            cv2.putText(
+                new_im,
+                text,
+                (10, 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA
+            )
 
             if self.scale != 1:
-                new_width = int(new_im.size[0] * self.scale)
-                new_height = int(new_im.size[1] * self.scale)
-                new_im = new_im.resize((new_width, new_height), resample=Image.NEAREST)
+                new_width = int(new_im.shape[1] * self.scale)
+                new_height = int(new_im.shape[0] * self.scale)
+                new_im = cv2.resize(new_im, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
 
             self.frames.append(new_im)
 
@@ -149,10 +165,11 @@ class SampleRecorder:
         save_path = os.path.join(self.save_dir, self.save_filename)
         
         # 첫 번째 이미지를 기준으로 저장
-        self.frames[0].save(
+        pil_frames = [Image.fromarray(frame) for frame in self.frames]
+        pil_frames[0].save(
             save_path,
             save_all=True,
-            append_images=self.frames[1:],
+            append_images=pil_frames[1:],
             optimize=False,
             duration=duration,
             loop=loop

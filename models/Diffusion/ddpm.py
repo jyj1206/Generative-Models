@@ -276,6 +276,12 @@ class UNet(nn.Module):
         
 
 if __name__ == "__main__":
-    model = UNet(dim=128, in_channels=3, image_size=32)
+    img_size = 256
+    dim = 128
+    in_channels = 3
+    dim_mults = [1, 1, 2, 2, 4, 4] 
+    attn_layers = [16]
+    num_res_blocks = 2
+    model = UNet(dim=dim, in_channels=in_channels, image_size=img_size, dim_mults=dim_mults, attn_layers=attn_layers, num_res_blocks=num_res_blocks)
   
-    summary(model, input_size=[(4, 3, 32, 32), (4,)], depth=4)
+    summary(model, input_size=[(4, 3, 256, 256), (4,)], depth=4)
