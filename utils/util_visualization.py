@@ -96,7 +96,7 @@ def save_latent_samples_grid(model, configs, device, epoch=None, scale=4):
 
         if epoch is None:
             output_dir = get_output_dir(configs)
-            save_path = os.path.join(output_dir, "visualization", "reconstructions_final.png")
+            save_path = os.path.join(output_dir, "visualization", "generated_samples_final.png")
         else:
             output_dir = get_output_dir(configs)
             save_path = os.path.join(output_dir, "visualization", "train", f"generated_samples_epoch_{epoch}.png" if epoch else "final_generated_samples.png")

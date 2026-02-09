@@ -5,9 +5,9 @@ from utils.utils_images import get_image_paths, imread_uint
 
 def get_transforms(img_size=None):
     return transforms.Compose([
-        transforms.Resize(img_size) if img_size is not None else transforms.Lambda(lambda x: x),
-        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
+        transforms.RandomHorizontalFlip(),
+        transforms.Resize(img_size) if img_size is not None else transforms.Identity(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     ])
 

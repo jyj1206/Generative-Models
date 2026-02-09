@@ -2,24 +2,24 @@ task: diffusion
 
 model:
   type: ddpm
-  img_size: 256          
+  img_size: 128          
   in_channels: 3
   num_res_blocks: 2      
   dim: 128                 
   
-  dim_mults: [1, 1, 2, 2, 4, 4] 
+  dim_mults: [1, 2, 4, 8]
   
   attn_layers: [16]
   
   dropout: 0.0
 
 dataset:
-  name: celeba_hq
+  name: custom
   root: ./data/celeba_hq_256
 
 train:
   epochs: 500              
-  batch_size: 32           
+  batch_size: 8           
   num_workers: 4
   learning_rate: 0.00002   
   loss_fn: mse

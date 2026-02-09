@@ -21,6 +21,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True)
     parser.add_argument('--scale', type=int, default=4)
+    parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--resume_ema', type=str, default=None)
     args = parser.parse_args()
     return args
 
@@ -29,6 +31,42 @@ def yaml_loader(configs_path):
     with open(configs_path, 'r') as f:
         configs = yaml.safe_load(f)
     return configs
+
+
+def load_resume_state(task, model, optimizer, device, resume_path, optimizer_g=None, optimizer_d=None,
+                      ema_model=None, resume_ema_path=None):
+    checkpoint = torch.load(resume_path, map_location=device)
+    start_epoch = int(checkpoint.get('epoch', 0))
+    iterations = int(checkpoint.get('iterations', 0))
+
+    if task == 'vae':
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    elif task == 'gan':
+        model.netG.load_state_dict(checkpoint['generator_state_dict'])
+        model.netD.load_state_dict(checkpoint['discriminator_state_dict'])
+        optimizer_g.load_state_dict(checkpoint['optimizer_g_state_dict'])
+        optimizer_d.load_state_dict(checkpoint['optimizer_d_state_dict'])
+    elif task == 'diffusion':
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    else:
+        raise ValueError(f"Unsupported task: {task}")
+
+    if ema_model is not None:
+        if resume_ema_path is None:
+            candidate = resume_path.replace('.pth', '_ema.pth')
+            if os.path.exists(candidate):
+                resume_ema_path = candidate
+
+        if resume_ema_path is not None and os.path.exists(resume_ema_path):
+            ema_checkpoint = torch.load(resume_ema_path, map_location=device)
+            ema_model.load_state_dict(ema_checkpoint['model_state_dict'])
+        elif task == 'diffusion':
+            # Fallback: initialize EMA from the resumed model weights
+            ema_model.load_state_dict(model.state_dict())
+
+    return start_epoch, iterations
     
 
 def main():
@@ -42,8 +80,13 @@ def main():
 
     run_name = os.path.splitext(os.path.basename(args.config))[0]
     configs["run_name"] = run_name
-    configs["output_dir"] = build_output_dir(configs, run_name)
-    output_dir = configs["output_dir"]
+    if args.resume:
+        model_dir = os.path.dirname(os.path.abspath(args.resume))
+        output_dir = os.path.dirname(model_dir)
+        configs["output_dir"] = output_dir
+    else:
+        configs["output_dir"] = build_output_dir(configs, run_name)
+        output_dir = configs["output_dir"]
     
     os.makedirs(os.path.join(output_dir, "checkpoints"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "visualization", "train"), exist_ok=True)
@@ -121,9 +164,23 @@ def main():
     loss_G_history = []
     loss_D_history = []
 
+    start_epoch = 0
     iterations = 0
+
+    if args.resume:
+        start_epoch, iterations = load_resume_state(
+            task,
+            model,
+            optimizer if task in ['vae', 'diffusion'] else None,
+            device,
+            args.resume,
+            optimizer_g=optimizer_G if task == 'gan' else None,
+            optimizer_d=optimizer_D if task == 'gan' else None,
+            ema_model=ema_model if ema else None,
+            resume_ema_path=args.resume_ema
+        )
     
-    for epoch in range(1, num_epochs + 1):
+    for epoch in range(start_epoch + 1, num_epochs + 1):
         model.train()
 
         pbar = tqdm(train_dataloader, desc=f"Epoch [{epoch}/{num_epochs}]")
