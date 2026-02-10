@@ -71,7 +71,7 @@ class GaussianDiffusion(nn.Module):
     
     
     def q_sample(self, x_start, t, noise=None):
-        """t 시점의 noisy sample 생성
+        """t 시점의 noisy sample 생성 (q(x_t|x_0))
         
         Args:
             x_start : Original Image (Batch, C, H, W)
@@ -90,7 +90,7 @@ class GaussianDiffusion(nn.Module):
     
     
     def p_losses(self, model, x_start, t, noise=None):
-        """time step t에서의 손실 계산
+        """time step t에서의 손실 계산 
         
         Args:
             model : The noise prediction model
@@ -110,7 +110,8 @@ class GaussianDiffusion(nn.Module):
     
     
     def p_mean_variance(self, model, x, t, clip_denoised=True):
-        """t 시점의 posterior의 평균 분산 계산
+        """t 시점의 q(x_t|x_t, x_0)의 posterior의 평균, 분산 계산하여, 
+        학습된 모델의 reverse process 분포 p(x_{t-1}|x_t) 추정 
 
         Args:
             model : The noise prediction model
@@ -132,7 +133,7 @@ class GaussianDiffusion(nn.Module):
             pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
         
         model_mean = (
-            self._extract(self.posterior_mean_coef1, t, x.shape) *pred_x0 + 
+            self._extract(self.posterior_mean_coef1, t, x.shape) * pred_x0 + 
             self._extract(self.posterior_mean_coef2, t, x.shape) * x
         )
         

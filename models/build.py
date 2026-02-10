@@ -1,7 +1,5 @@
 import torch
 
-from models.Diffusion.diffusion_utils import linear_beta_schedule
-
 
 def build_model(configs):
     model_type = configs["model"]["type"]
@@ -28,7 +26,7 @@ def build_model(configs):
         model = VanillaGAN(generator, discriminator)
         
     elif model_type == 'ddpm':
-        from models.Diffusion.ddpm import UNet
+        from models.Diffusion.unet import UNet
         
         in_channels = int(configs["model"]['in_channels'])
         img_size = int(configs["model"]['img_size'])
