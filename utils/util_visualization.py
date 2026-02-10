@@ -8,6 +8,16 @@ from utils.util_makegif import SampleRecorder
 from utils.util_paths import get_output_dir
 
 
+def _imwrite_unicode(path, img):
+    ext = os.path.splitext(path)[1]
+    ext = ext if ext else ".png"
+    ok, encoded = cv2.imencode(ext, img)
+    if not ok:
+        return False
+    encoded.tofile(path)
+    return True
+
+
 def save_single_image(sample, save_path, scale=4):
     img = sample[0].permute(1, 2, 0).squeeze().clamp(0, 1).cpu().numpy()
 
@@ -17,7 +27,7 @@ def save_single_image(sample, save_path, scale=4):
             new_width = int(ndarr.shape[1] * scale)
             new_height = int(ndarr.shape[0] * scale)
             ndarr = cv2.resize(ndarr, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
-        cv2.imwrite(save_path, ndarr)
+        _imwrite_unicode(save_path, ndarr)
         return
 
     ndarr = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
@@ -27,7 +37,7 @@ def save_single_image(sample, save_path, scale=4):
         ndarr = cv2.resize(ndarr, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
 
     bgr = cv2.cvtColor(ndarr, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(save_path, bgr)
+    _imwrite_unicode(save_path, bgr)
 
 
 def save_grid_image(x_t, save_path, scale=4, normalize=True):
@@ -44,7 +54,7 @@ def save_grid_image(x_t, save_path, scale=4, normalize=True):
         ndarr = cv2.resize(ndarr, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
 
     bgr = cv2.cvtColor(ndarr, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(save_path, bgr)
+    _imwrite_unicode(save_path, bgr)
 
 
 def save_loss_curve(configs, loss_history1, loss_history2=None,
