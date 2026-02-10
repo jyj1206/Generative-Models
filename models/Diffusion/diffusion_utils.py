@@ -143,7 +143,7 @@ class GaussianDiffusion(nn.Module):
     
     
     def p_sample(self, model, x, t):
-        """t 시점에서의 샘플링
+        """t 시점에서의 샘플링 (p(x_{t-1}|x_t))
 
         Args:
             model: The noise prediction model

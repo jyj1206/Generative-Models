@@ -106,7 +106,7 @@ def main():
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=True
+        cemory=True
     )
     test_dataloader = DataLoader(
         test_dataset,
