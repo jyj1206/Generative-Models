@@ -28,6 +28,7 @@ train:
   ema_decay: 0.9999
 
 diffusion:
+  diffuser: ddpm_scheduler 
   num_timesteps: 1000
   beta_start: 0.0001
   beta_end: 0.02

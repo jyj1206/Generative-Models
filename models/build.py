@@ -70,8 +70,9 @@ def build_loss_function(configs):
             from models.GANs.gan_loss import vanila_gan_loss
             loss_fn = vanila_gan_loss()
             
-    elif model_type == 'diffusion':
-        pass
+    elif model_type == 'ddpm':
+        # Diffusion loss is implemented in the scheduler/model training loop.
+        loss_fn = None
     else:
         raise ValueError(f"Unknown model: {model_type}")
 
@@ -95,8 +96,8 @@ def build_optimizer(model, configs):
 
 
 def build_diffusion_scheduler(configs, device):
-    from models.Diffusion.diffusion_utils import GaussianDiffusion, linear_beta_schedule
-
+    from models.Diffusion.diffusion_utils import linear_beta_schedule
+    
     beta_start = float(configs["diffusion"]['beta_start'])
     beta_end = float(configs["diffusion"]['beta_end'])
     num_timesteps = int(configs["diffusion"]['num_timesteps'])
@@ -106,13 +107,26 @@ def build_diffusion_scheduler(configs, device):
         beta_start=beta_start,
         beta_end=beta_end
     )
-
-    variance_type = configs["diffusion"].get("variance_type", "fixed_small")
     
-    diffusion = GaussianDiffusion(
+    
+    scheduler = configs['diffusion'].get('diffuser', 'ddpm_scheduler')
+    variance_type = None
+    
+    if scheduler == 'ddpm_scheduler':
+        from models.Diffusion.diffusion_utils import DDPMScheduler
+        variance_type = configs["diffusion"].get("variance_type", "fixed_small")
+        DiffusionScheduler = DDPMScheduler
+        
+    elif scheduler == 'ddim_scheduler':
+        raise NotImplementedError("DDIM scheduler is not implemented yet.")
+        
+    else:
+        raise ValueError(f"Unknown diffusion scheduler: {scheduler}")
+
+    diffusion = DiffusionScheduler(
         betas=betas,
         device=device,
         variance_type=variance_type
     )
-
+    
     return diffusion, num_timesteps

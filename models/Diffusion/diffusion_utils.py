@@ -1,26 +1,26 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
+from abc import ABC, abstractmethod
 
 
 def linear_beta_schedule(timesteps, beta_start=0.0001, beta_end=0.02):
     return torch.linspace(beta_start, beta_end, timesteps)
 
 
-class GaussianDiffusion(nn.Module):
-    def __init__(self, betas, device, variance_type='fixed_small'):
+class GaussianDiffusion(nn.Module, ABC):
+    def __init__(self, betas, device):
         super().__init__()
         
-        betas = betas.to(device)
+        betas = betas.to(device) 
         self.register_buffer('betas', betas)
 
-        alphas = 1.0 - betas
-        alphas_cumprod = torch.cumprod(alphas, dim=0)
+        alphas = 1.0 - betas 
+        alphas_cumprod = torch.cumprod(alphas, dim=0) 
 
-        sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
-        sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod)
-        sqrt_recip_alphas_cumprod = torch.sqrt(1.0 / alphas_cumprod)
+        sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod) 
+        sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod) 
+        sqrt_recip_alphas_cumprod = torch.sqrt(1.0 / alphas_cumprod) 
 
         self.register_buffer('alphas', alphas)
         self.register_buffer('alphas_cumprod', alphas_cumprod)
@@ -32,26 +32,6 @@ class GaussianDiffusion(nn.Module):
         alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
 
         self.register_buffer('alphas_cumprod_prev', alphas_cumprod_prev)
-        self.register_buffer(
-            'posterior_mean_coef1',
-            torch.sqrt(alphas_cumprod_prev) * betas / (1.0 - alphas_cumprod)
-        )
-        self.register_buffer(
-            'posterior_mean_coef2',
-            torch.sqrt(alphas) * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
-        )
-            
-        if variance_type == 'fixed_small':
-            posterior_variance_t = betas[1:] * (1.0 - alphas_cumprod[:-1]) / (1.0 - alphas_cumprod[1:])
-        else:
-            posterior_variance_t = betas[1:]
-            
-        posterior_variance_t = torch.cat(
-            [torch.tensor([0.0], device=self.betas.device), posterior_variance_t], dim=0
-        )
-        
-        self.register_buffer('posterior_variance', posterior_variance_t)
-        self.register_buffer('posterior_log_variance_clipped', torch.log(torch.clamp(posterior_variance_t, min=1e-20)))
         
 
     def _extract(self, a, t, x_shape): 
@@ -88,6 +68,63 @@ class GaussianDiffusion(nn.Module):
         sqrt_one_minus_alphas_cumprod_t = self._extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
     
+
+    def p_losses(self, model, x_start, t, noise=None):
+        """time step t에서의 손실 계산 
+        
+        Args:
+            model : The noise prediction model
+            x_start : Original Image (Batch, C, H, W)
+            t : timesteps (Batch,)
+            noise : Optional Noise Tensor (Batch, C, H, W)
+
+        Returns:
+            loss : MSE loss between true noise and predicted noise
+        """
+        if noise is None:
+            noise = torch.randn_like(x_start)
+            
+        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        pred_noise = model(x_noisy, t)
+        return F.mse_loss(noise, pred_noise)
+    
+    
+    @abstractmethod
+    def p_sample(self, model, x, t):
+        raise NotImplementedError()
+    
+    @abstractmethod
+    def p_sample_loop(self, model, shape):
+        raise NotImplementedError()
+    
+
+class DDPMScheduler(GaussianDiffusion):
+    def __init__(self, betas, device, variance_type='fixed_small'):
+        super().__init__(betas, device)
+
+        betas = self.betas
+        
+        self.register_buffer(
+            'posterior_mean_coef1',
+            torch.sqrt(self.alphas_cumprod_prev) * betas / (1.0 - self.alphas_cumprod)
+        )
+        self.register_buffer(
+            'posterior_mean_coef2',
+            torch.sqrt(self.alphas) * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
+        )
+            
+        if variance_type == 'fixed_small':
+            posterior_variance_t = betas[1:] * (1.0 - self.alphas_cumprod[:-1]) / (1.0 - self.alphas_cumprod[1:])
+        else:
+            posterior_variance_t = betas[1:]
+            
+        posterior_variance_t = torch.cat(
+            [torch.tensor([0.0], device=self.betas.device), posterior_variance_t], dim=0
+        )
+        
+        self.register_buffer('posterior_variance', posterior_variance_t)
+        self.register_buffer('posterior_log_variance_clipped', torch.log(torch.clamp(posterior_variance_t, min=1e-20)))
+        
     
     def p_losses(self, model, x_start, t, noise=None):
         """time step t에서의 손실 계산 
@@ -178,6 +215,18 @@ class GaussianDiffusion(nn.Module):
             img = self.p_sample(model, img, t)
         
         return img
+
+
+class DDIMScheduler(GaussianDiffusion):
+    def __init__(self, betas, device, eta=0.0):
+        super().__init__(betas, device)
+        self.eta = eta
+        
+    
+    def p_sample()
+
+    def p_sample_loop()
+
 
 
 if __name__ == "__main__":
