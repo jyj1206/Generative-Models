@@ -28,10 +28,6 @@ class GaussianDiffusion(nn.Module, ABC):
         self.register_buffer('sqrt_alphas_cumprod', sqrt_alphas_cumprod)
         self.register_buffer('sqrt_one_minus_alphas_cumprod', sqrt_one_minus_alphas_cumprod)
         self.register_buffer('sqrt_recip_alphas_cumprod', sqrt_recip_alphas_cumprod)
-
-        alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
-
-        self.register_buffer('alphas_cumprod_prev', alphas_cumprod_prev)
         
 
     def _extract(self, a, t, x_shape): 
@@ -103,6 +99,10 @@ class DDPMScheduler(GaussianDiffusion):
         super().__init__(betas, device)
 
         betas = self.betas
+        
+        alphas_cumprod_prev = torch.cat([torch.tensor([1.0], device=self.betas.device), self.alphas_cumprod[:-1]], dim=0)
+
+        self.register_buffer('alphas_cumprod_prev', alphas_cumprod_prev)
         
         self.register_buffer(
             'posterior_mean_coef1',
@@ -179,7 +179,7 @@ class DDPMScheduler(GaussianDiffusion):
         return model_mean, model_log_variance
     
     
-    def p_sample(self, model, x, t):
+    def p_sample(self, model, x, t, **kwargs):
         """t 시점에서의 샘플링 (p(x_{t-1}|x_t))
 
         Args:
@@ -221,25 +221,84 @@ class DDIMScheduler(GaussianDiffusion):
     def __init__(self, betas, device, eta=0.0):
         super().__init__(betas, device)
         self.eta = eta
-        
     
-    def p_sample()
+    
+    def _set_timesteps(self, sampling_steps):
+        self.sampling_timesteps = sampling_steps
+        self.timesteps = torch.linspace(0, len(self.betas) - 1, sampling_steps).long().flip(dims=[0])
+    
+        self.alpha_cumprod_at_t = self.alphas_cumprod[self.timesteps]
+        self.alpha_cumprod_at_prev = torch.cat(
+            [self.alpha_cumprod_at_t[1:], torch.tensor([1.0], device=self.betas.device)], dim=0
+        )
+        
+        at_t = self.alpha_cumprod_at_t
+        at_prev = self.alpha_cumprod_at_prev
+        
+        if self.eta == 0.0:
+            self.sigma_at_t = torch.zeros_like(at_t)
+        else:
+            self.sigma_at_t = self.eta * torch.sqrt(
+                (1 - at_prev) / (1 - at_t) * (1 - at_t / at_prev)
+            )
+    
+    
+    def p_sample(self, model, x, t, t_idx, clip_denoised=True):
+        pred_noise = model(x, t)
+        
+        at_t = self.alpha_cumprod_at_t[t_idx]
+        at_prev = self.alpha_cumprod_at_prev[t_idx]
+        sigma_t = self.sigma_at_t[t_idx]
 
-    def p_sample_loop()
+        sqrt_recip_at_t = torch.sqrt(1.0 / at_t)
+        sqrt_one_minus_at_t = torch.sqrt(1.0 - at_t)
+        
+        pred_x0 = sqrt_recip_at_t * x - (sqrt_recip_at_t * sqrt_one_minus_at_t) * pred_noise   
+        
+        if clip_denoised:
+            pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
+            
+        dir_xt = torch.sqrt(1.0 - at_prev - sigma_t**2) * pred_noise
+        
+        if sigma_t > 0:
+            random_noise = torch.randn_like(x)
+        else:
+            random_noise = 0.0
+        
+        return torch.sqrt(at_prev) * pred_x0 + dir_xt + sigma_t * random_noise   
+    
+
+    def p_sample_loop(self, model, shape, clip_denoised=True, sampling_steps=50):
+        self._set_timesteps(sampling_steps)
+        
+        device = self.betas.device
+        batch_size = shape[0]
+        
+        img = torch.randn(shape, device=device)
+        
+        for i in range(sampling_steps):
+            t = torch.full((batch_size,), self.timesteps[i], device=device, dtype=torch.long)
+            img = self.p_sample(model, img, t, i, clip_denoised)
+        return img        
+
 
 
 
 if __name__ == "__main__":
     timesteps = 1000
     betas = linear_beta_schedule(timesteps)
-    model = GaussianDiffusion(betas=betas, device='cpu')
-    print(model)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    sample_shape = (4, 3, 32, 32)
-    samples = model.p_sample_loop(model=lambda x, t: x, shape=sample_shape)
+    dummy_model = lambda x, t: torch.randn_like(x)
     
-    print("Generated samples shape:", samples.shape)
-    assert samples.shape == sample_shape
+    ddpm_scheduler = DDPMScheduler(betas, device)
+    ddpm_scheduler.to(device)   
+
+    ddpm_scheduler.p_sample_loop(model=dummy_model, shape=(16, 3, 32, 32)) 
+    print("DDPM schedulers test passed.")
     
-    print("Diffusion model test passed.")
+    ddim_scheduler = DDIMScheduler(betas, device, eta=0.0)
     
+    ddim_scheduler.to(device)
+    ddim_scheduler.p_sample_loop(model=None, shape=(16, 3, 32, 32), sampling_steps=50)
+    print("Diffusion schedulers test passed.")

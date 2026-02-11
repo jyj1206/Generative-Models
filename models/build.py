@@ -25,7 +25,7 @@ def build_model(configs):
         
         model = VanillaGAN(generator, discriminator)
         
-    elif model_type == 'ddpm':
+    elif model_type in ['ddpm', 'ddim']:
         from models.Diffusion.unet import UNet
         
         in_channels = int(configs["model"]['in_channels'])
@@ -110,23 +110,25 @@ def build_diffusion_scheduler(configs, device):
     
     
     scheduler = configs['diffusion'].get('diffuser', 'ddpm_scheduler')
-    variance_type = None
+    scheduler_kwargs = {}
     
     if scheduler == 'ddpm_scheduler':
         from models.Diffusion.diffusion_utils import DDPMScheduler
         variance_type = configs["diffusion"].get("variance_type", "fixed_small")
+        scheduler_kwargs["variance_type"] = variance_type
         DiffusionScheduler = DDPMScheduler
         
     elif scheduler == 'ddim_scheduler':
-        raise NotImplementedError("DDIM scheduler is not implemented yet.")
-        
+        from models.Diffusion.diffusion_utils import DDIMScheduler
+        DiffusionScheduler = DDIMScheduler
     else:
         raise ValueError(f"Unknown diffusion scheduler: {scheduler}")
 
     diffusion = DiffusionScheduler(
         betas=betas,
         device=device,
-        variance_type=variance_type
+        **scheduler_kwargs
     )
     
     return diffusion, num_timesteps
+

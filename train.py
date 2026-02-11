@@ -3,6 +3,7 @@ import os
 import argparse
 import yaml
 import copy
+import math
 
 from models.build import build_model, build_loss_function, build_optimizer, build_diffusion_scheduler
 from datasets.build import build_dataset
@@ -124,7 +125,12 @@ def main():
     """
         Training model
     """
-    num_epochs = int(configs["train"]["epochs"])
+    steps_per_epoch = len(train_dataloader)
+    if "iterations" in configs["train"]:
+        iterations_target = int(configs["train"]["iterations"])
+        num_epochs = max(1, math.ceil(iterations_target / steps_per_epoch))
+    else:
+        num_epochs = int(configs["train"]["epochs"])
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -200,7 +206,6 @@ def main():
                 train_loss_sum += loss.item()
 
                 iterations += 1
-                
                 pbar.set_postfix({'loss': f"{loss.item():.4f}, iter': {iterations}"})
             
             avg_train_loss = train_loss_sum / len(train_dataloader.dataset)
@@ -273,7 +278,6 @@ def main():
                 loss_G_sum += loss_G.item()
                 
                 iterations += 1
-                
                 pbar.set_postfix({'loss_D': f"{loss_D.item():.4f}", 'loss_G': f"{loss_G.item():.4f}", 'iter': f"{iterations}"})
                 
             avg_loss_D = loss_D_sum / len(train_dataloader)
@@ -310,7 +314,6 @@ def main():
                 train_loss_sum += loss.item()
                 
                 iterations += 1
-                
                 pbar.set_postfix({'loss': f"{loss.item():.4f}", 'iter': f"{iterations}"})
                 
             avg_train_loss = train_loss_sum / len(train_dataloader)
