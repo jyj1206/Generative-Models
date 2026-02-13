@@ -11,8 +11,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from utils.util_makegif import TrainRecorder
-from utils.util_visualization import save_latent_samples_grid, save_loss_curve
-from utils.util_visualization import save_vae_recon_grid, save_diffusion_samples_grid, save_diffusion_sampling_gif
+from utils.util_visualization import generate_and_save_samples, save_loss_curve
+from utils.util_visualization import save_vae_recon_grid, save_diffusion_sampling_gif
 from utils.util_save import save_vae_checkpoint, save_gan_checkpoint, save_diffusion_checkpoint
 from utils.util_ema import ema_update
 from utils.util_paths import build_output_dir
@@ -109,13 +109,17 @@ def main():
         num_workers=num_workers,
         pin_memory=True
     )
-    test_dataloader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True
-    )
+    
+    test_dataloader = None
+    
+    if test_dataset is not None:
+        test_dataloader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True
+        )
     
     """
         Building model
@@ -146,10 +150,19 @@ def main():
     else:
         raise ValueError(f"Unsupported task: {task}")
 
+    use_cfg = False
+    p_uncond = 0.0
+    num_classes = None
     if task != 'diffusion':
         criterion = build_loss_function(configs)
     else:
         diffusion, num_timesteps = build_diffusion_scheduler(configs, device)
+        use_cfg = configs.get("diffusion", {}).get("use_cfg", False)  # Explicit CFG flag
+        if use_cfg:
+            num_classes = configs.get("dataset", {}).get("num_classes", None)
+            if num_classes is None:
+                raise ValueError("use_cfg=True requires dataset.num_classes to be set in config")
+            p_uncond = float(configs.get("diffusion", {}).get("p_uncond", 0.0))
     
     if task in ['vae', 'gan']:
         recorder = TrainRecorder(configs, device, num_samples=16, scale=args.scale)
@@ -233,7 +246,7 @@ def main():
             
 
             if epoch % 20 == 0:            
-                save_latent_samples_grid(model.decoder, configs, device, epoch=epoch, scale=args.scale)
+                generate_and_save_samples(model.decoder, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
                 save_vae_recon_grid(model, configs, train_dataloader, device, epoch, train=True, scale=args.scale)
                 save_vae_recon_grid(model, configs, test_dataloader, device, epoch, train=False, scale=args.scale)
                 
@@ -290,20 +303,29 @@ def main():
             recorder.record_frame(model.netG, epoch)
             
             if epoch % 25 == 0:  
-                save_latent_samples_grid(model.netG, configs, device, epoch=epoch, scale=args.scale)
+                generate_and_save_samples(model.netG, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
                 save_gan_checkpoint(model, optimizer_G, optimizer_D, avg_loss_G, avg_loss_D, configs, epoch, iterations)
  
         elif task == 'diffusion':
             train_loss_sum = 0.0
             
-            for inputs, _ in pbar:
+            for inputs, labels in pbar:
                 inputs = inputs.to(device)
+                model_kwargs = None
+                
+                if use_cfg: # for class-conditional diffusion
+                    labels = labels.to(device)
+                    if p_uncond > 0.0:
+                        drop_mask = torch.rand(labels.shape, device=device) < p_uncond
+                        labels = labels.clone()
+                        labels[drop_mask] = diffusion.null_token_idx
+                    model_kwargs = {"y": labels}
                 
                 optimizer.zero_grad()
 
                 t = torch.randint(0, num_timesteps, (inputs.size(0),), device=device).long()
                 
-                loss = diffusion.p_losses(model, inputs, t)
+                loss = diffusion.p_losses(model, inputs, t, model_kwargs=model_kwargs)
                 
                 loss.backward()
                 optimizer.step()
@@ -321,7 +343,16 @@ def main():
             print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.4f}")
             
             if epoch % 25 == 0:
-                save_diffusion_samples_grid(ema_model if ema else model, configs, diffusion, epoch=epoch, scale=args.scale)
+                generate_and_save_samples(
+                    ema_model if ema else model,
+                    configs,
+                    device,
+                    diffusion=diffusion,
+                    num_samples=16,
+                    epoch=epoch,
+                    scale=args.scale,
+                    use_cfg=use_cfg
+                )
                 save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if configs['train']['ema'] else None)
             
 
@@ -330,33 +361,41 @@ def main():
     
     model.eval()
     if task == 'vae':
-        save_latent_samples_grid(model.decoder, configs, device, scale=args.scale)
+        generate_and_save_samples(model.decoder, configs, device, num_samples=16, scale=args.scale)
         
         save_vae_recon_grid(model, configs, test_dataloader, device, scale=args.scale)
         
         save_loss_curve(configs, train_loss_history, test_loss_history)
+        
         save_vae_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True)
     
     elif task == 'gan':
-        save_latent_samples_grid(model.netG, configs, device, scale=args.scale)
+        generate_and_save_samples(model.netG, configs, device, num_samples=16, scale=args.scale)
         
         save_loss_curve(configs, loss_G_history, loss_D_history, "Generator Loss", "Discriminator Loss")
         save_gan_checkpoint(model, optimizer_G, optimizer_D, avg_loss_G, avg_loss_D, configs, num_epochs, iterations, final=True)
     
     elif task == 'diffusion':
-        save_diffusion_samples_grid(ema_model if ema else model, configs, diffusion, scale=args.scale)
+        generate_and_save_samples(
+            ema_model if ema else model,
+            configs,
+            device,
+            diffusion=diffusion,
+            num_samples=16,
+            scale=args.scale,
+            use_cfg=use_cfg
+        )
         save_diffusion_sampling_gif(
             ema_model if ema else model,
             diffusion,
             configs,
             num_samples=16,
             capture_interval=20,
-            scale=args.scale
+            scale=args.scale,
+            use_cfg=use_cfg
         )
-        
         save_loss_curve(configs, train_loss_history)
         save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True, ema_model=ema_model if ema else None)
-    
     
 if __name__ == "__main__":
     main()

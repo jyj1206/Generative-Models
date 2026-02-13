@@ -5,9 +5,9 @@ import yaml
 import torch
 
 from models.build import build_model, build_diffusion_scheduler
-from utils.util_makegif import SampleRecorder
 from utils.util_paths import append_timestamp, get_timestamp
-from utils.util_visualization import save_grid_image, save_single_image
+from utils.utils_images import save_single_image
+from utils.util_visualization import save_diffusion_sampling_gif, generate_and_save_samples
 
 
 def parse_args():
@@ -19,6 +19,8 @@ def parse_args():
     parser.add_argument('--seed', type=int)
     parser.add_argument('--diffusion_gif', action='store_true')
     parser.add_argument('--sampling_steps', type=int, default=None)
+    parser.add_argument('--guidance_scale', type=float, default=1.0)
+    parser.add_argument('--class_id', type=int, default=None)
     parser.add_argument('--gif_interval', type=int, default=10)
     parser.add_argument('--gif_duration', type=int, default=50)
     parser.add_argument('--gif_name', type=str, default='sampling_process.gif')
@@ -43,76 +45,33 @@ def load_checkpoint(model, model_path, device):
         model.load_state_dict(checkpoint)
 
 
-def sample_one(model, configs, device, diffusion=None, sampling_steps=None):
+def sample_one(model, configs, device, diffusion=None, sampling_steps=None, use_cfg=False, class_id=None, guidance_scale=1.0):
+    """Generate a single sample using the unified generate_and_save_samples function."""
     task = configs["task"]
     model.eval()
-    with torch.no_grad():
-        if task == "vae":
-            z = torch.randn(1, model.latent_dim, device=device)
-            sample = model.decoder(z)
-            if configs["model"].get("activation") == "tanh":
-                sample = (sample + 1) / 2
-        elif task == "gan":
-            z = torch.randn(1, model.netG.latent_dim, device=device)
-            sample = model.netG(z)
-            if configs["model"].get("activation") == "tanh":
-                sample = (sample + 1) / 2
-        elif task == "diffusion":
-            if diffusion is None:
-                raise ValueError("Diffusion sampler is required.")
-            in_channels = int(configs["model"]["in_channels"])
-            img_size = int(configs["model"]["img_size"])
-            if sampling_steps is not None and hasattr(diffusion, "_set_timesteps"):
-                sample = diffusion.p_sample_loop(
-                    model,
-                    shape=(1, in_channels, img_size, img_size),
-                    sampling_steps=sampling_steps
-                )
-            else:
-                sample = diffusion.p_sample_loop(model, shape=(1, in_channels, img_size, img_size))
-            sample = (sample + 1) / 2
-        else:
-            raise ValueError(f"Unsupported task: {task}")
-
-    return sample.clamp(0, 1).cpu()
-
-
-def save_diffusion_gif(model, diffusion, configs, save_dir, filename, final_name=None, capture_interval=200, duration=100, scale=4, sampling_steps=None):
-    device = diffusion.betas.device
-    num_samples = 16
-    img_size = int(configs["model"]["img_size"])
-    channels = int(configs["model"]["in_channels"])
-
-    recorder = SampleRecorder(configs, device=device, save_filename=filename, save_dir=save_dir, scale=scale)
-    img = torch.randn((num_samples, channels, img_size, img_size), device=device)
-
-    with torch.no_grad():
-        total_steps = len(diffusion.betas)
-        if hasattr(diffusion, "_set_timesteps"):
-            if sampling_steps is None:
-                sampling_steps = 50
-            diffusion._set_timesteps(sampling_steps)
-        if hasattr(diffusion, "timesteps"):
-            # for ddim
-            sampling_steps = len(diffusion.timesteps)
-            for i in range(sampling_steps):
-                t = torch.full((num_samples,), diffusion.timesteps[i], device=device, dtype=torch.long)
-                img = diffusion.p_sample(model, img, t, i)
-                if i % capture_interval == 0 or i == sampling_steps - 1:
-                    recorder.record_step(img, t=int(diffusion.timesteps[i]))
-        else:
-            # for ddpm
-            for i in reversed(range(total_steps)):
-                t = torch.full((num_samples,), i, device=device, dtype=torch.long)
-                img = diffusion.p_sample(model, img, t)
-                if i % capture_interval == 0 or i == 0:
-                    recorder.record_step(img, t=i)
-
-    recorder.save_gif(duration=duration)
-
-    if final_name is not None:
-        final_path = os.path.join(save_dir, final_name)
-        save_grid_image(img, final_path, scale=scale, normalize=True)
+    
+    # Use generate_and_save_samples to generate one sample (without saving to default path)
+    if task == "diffusion":
+        sample = generate_and_save_samples(
+            model, configs, device, diffusion=diffusion, num_samples=1,
+            use_cfg=use_cfg, class_id=class_id, guidance_scale=guidance_scale,
+            sampling_steps=sampling_steps,
+            save_to_file=False  # Don't save, we'll save separately with custom path
+        )
+    elif task == "vae":
+        sample = generate_and_save_samples(
+            model.decoder, configs, device, num_samples=1,
+            save_to_file=False
+        )
+    elif task == "gan":
+        sample = generate_and_save_samples(
+            model.netG, configs, device, num_samples=1,
+            save_to_file=False
+        )
+    else:
+        raise ValueError(f"Unsupported task: {task}")
+    
+    return sample
 
 
 def main():
@@ -139,12 +98,33 @@ def main():
         torch.manual_seed(args.seed)
 
     diffusion = None
+    use_cfg = False
     if configs["task"] == "diffusion":
         diffusion, _ = build_diffusion_scheduler(configs, device)
+        use_cfg = configs.get("diffusion", {}).get("use_cfg", False)  # Explicit CFG flag
+        
+        # Validate class_id if provided
+        if args.class_id is not None:
+            if not use_cfg:
+                raise ValueError("class_id was provided but use_cfg=False in config.")
+            num_classes = configs.get("dataset", {}).get("num_classes", None)
+            if num_classes is None:
+                raise ValueError("class_id requires dataset.num_classes to be set in config.")
+            if args.class_id < 0 or args.class_id >= int(num_classes):
+                raise ValueError(f"class_id must be in [0, {int(num_classes) - 1}].")
 
     timestamp = get_timestamp()
     start_time = time.perf_counter()
-    sample = sample_one(model, configs, device, diffusion=diffusion, sampling_steps=args.sampling_steps)
+    sample = sample_one(
+        model,
+        configs,
+        device,
+        diffusion=diffusion,
+        sampling_steps=args.sampling_steps,
+        use_cfg=use_cfg,
+        class_id=args.class_id,
+        guidance_scale=args.guidance_scale
+    )
     save_path = os.path.join(inference_dir, append_timestamp(args.out_name, timestamp))
     save_single_image(sample, save_path, scale=args.scale)
     elapsed = time.perf_counter() - start_time
@@ -154,16 +134,20 @@ def main():
     if configs["task"] == "diffusion" and args.diffusion_gif:
         gif_name = append_timestamp(args.gif_name, timestamp)
         final_name = append_timestamp(args.gif_final_name, timestamp)
-        save_diffusion_gif(
+        save_diffusion_sampling_gif(
             model,
             diffusion,
             configs,
+            num_samples=16,
+            capture_interval=args.gif_interval,
+            scale=args.scale,
+            use_cfg=use_cfg,
+            class_id=args.class_id,
+            guidance_scale=args.guidance_scale,
             save_dir=inference_dir,
             filename=gif_name,
             final_name=final_name,
-            capture_interval=args.gif_interval,
             duration=args.gif_duration,
-            scale=args.scale,
             sampling_steps=args.sampling_steps
         )
 

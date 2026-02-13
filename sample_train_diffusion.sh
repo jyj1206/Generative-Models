@@ -1,2 +1,2 @@
 conda activate gen_model
-python train.py --config configs/Diffusion/ddpm_cifar10.yaml
+python train.py --config configs/Diffusion/ddim_cfg_imagenet.yaml

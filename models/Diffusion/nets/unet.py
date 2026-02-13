@@ -29,23 +29,30 @@ class SinusoidalPositionEmbeddings(nn.Module):
         
 
 class Block(nn.Module):
-    def __init__(self, dim, dim_out, groups=8, dropout=0.0):
+    def __init__(self, dim, dim_out, groups=8, dropout=0.0, affine=True):
         super().__init__()
-        self.block = nn.Sequential(
-            nn.GroupNorm(groups, dim),
-            nn.SiLU(),
-            nn.Dropout(dropout),
-            nn.Conv2d(dim, dim_out, 3, padding=1)
-        )
+        self.norm = nn.GroupNorm(groups, dim, affine=affine)
+        self.act = nn.SiLU()
+        self.dropout = nn.Dropout(dropout)
+        self.conv = nn.Conv2d(dim, dim_out, 3, padding=1)
         
-    def forward(self, x):
+    def forward(self, x, scale_shift=None):
         """
         Args:
             x: Input Image (Batch, C, H, W)
         Returns:
             out: feature map after Block (Batch, C, H, W)
         """
-        return self.block(x)
+        x = self.norm(x)
+        
+        if scale_shift is not None:
+            scale, shift = scale_shift
+            x = x * (1 + scale) + shift
+        
+        x = self.act(x)
+        x = self.dropout(x)               
+        x = self.conv(x)
+        return x
         
         
 class ResBlock(nn.Module):    
@@ -91,12 +98,62 @@ class ResBlock(nn.Module):
         return x + h
 
 
-class AttentionBlock(nn.Module):
-    def __init__(self, dim, num_heads=4): 
+class AdaptiveResBlock(nn.Module):
+    def __init__(self, dim, dim_out, time_emb_dim=None, groups=8, dropout=0.0, upsample=False, downsample=False):
         super().__init__()
-        self.num_heads = num_heads
-        inner_dim = dim 
-        self.scale = (dim // num_heads) ** -0.5
+        
+        self.upsample = upsample
+        self.downsample = downsample
+        
+        if time_emb_dim is not None:
+            self.time_emb_proj = nn.Sequential(
+                nn.SiLU(),
+                nn.Linear(time_emb_dim, dim_out * 2)
+            )
+        else:
+            self.time_emb_proj = None
+        
+        self.block1 = Block(dim, dim_out, groups=groups)
+        self.block2 = Block(dim_out, dim_out, groups=groups, dropout=dropout, affine=False)
+        
+        if dim != dim_out:
+            self.res_conv = nn.Conv2d(dim, dim_out, 1)
+        else:
+            self.res_conv = nn.Identity()
+            
+        
+    def forward(self, x, time_emb=None):
+        h = self.block1(x)
+        
+        if self.upsample:
+            h = F.interpolate(h, scale_factor=2.0, mode='nearest')
+        elif self.downsample:
+            h = F.avg_pool2d(h, kernel_size=2, stride=2)
+        
+        scale_shift = None
+        if self.time_emb_proj is not None and time_emb is not None:
+            emb = self.time_emb_proj(time_emb)[:, :, None, None]
+            scale, shift = emb.chunk(2, dim=1)   
+            scale_shift = (scale, shift)
+            
+        h = self.block2(h, scale_shift=scale_shift)
+        
+        shortcut = x
+        if self.upsample:
+            shortcut = F.interpolate(shortcut, scale_factor=2.0, mode='nearest')
+        elif self.downsample:
+            shortcut = F.avg_pool2d(shortcut, kernel_size=2, stride=2)
+            
+        shortcut = self.res_conv(shortcut)
+        return h + shortcut
+
+
+class AttentionBlock(nn.Module):
+    def __init__(self, dim, num_heads=4, dim_head=64): 
+        super().__init__()
+        self.heads = dim // dim_head
+        self.scale = dim_head ** -0.5
+        inner_dim = dim_head * num_heads
         
         self.norm = nn.GroupNorm(32, dim) 
         self.to_qkv = nn.Conv2d(dim, inner_dim * 3, 1, bias=False) 
@@ -108,9 +165,9 @@ class AttentionBlock(nn.Module):
         qkv = self.to_qkv(x_norm)
         q, k, v = qkv.chunk(3, dim=1)
         
-        q = q.reshape(b, self.num_heads, c // self.num_heads, h * w)
-        k = k.reshape(b, self.num_heads, c // self.num_heads, h * w)
-        v = v.reshape(b, self.num_heads, c // self.num_heads, h * w)
+        q = q.reshape(b, self.heads, c // self.heads, h * w)
+        k = k.reshape(b, self.heads, c // self.heads, h * w)
+        v = v.reshape(b, self.heads, c // self.heads, h * w)
         
         attn = q.transpose(-2, -1) @ k * self.scale
         attn = attn.softmax(dim=-1)
@@ -156,12 +213,22 @@ class Upsample(nn.Module):
 
 
 class UNet(nn.Module):
-    def __init__(self, dim, init_dim=None, dim_mults=(1, 2, 2, 2), attn_layers=(16,), num_res_blocks = 2, dropout=0.0, in_channels=3, image_size=32):
+    def __init__(self, dim, init_dim=None, dim_mults=(1, 2, 2, 2), attn_layers=(16,), 
+                 num_res_blocks = 2, dropout=0.0, in_channels=3, image_size=32,
+                 num_classes=None, use_biggan_resample=False):
         super().__init__()
 
         init_dim = dim if init_dim is None else init_dim 
         time_dim = dim * 4 
 
+        # for condtional diffusion
+        if num_classes is not None:
+            self.label_emb = nn.Embedding(num_classes+1, time_dim)
+            ResBlockType = AdaptiveResBlock
+        else:
+            self.label_emb = None
+            ResBlockType = ResBlock
+            
         self.init_conv = nn.Conv2d(in_channels, init_dim, 3, padding=1)
     
         self.time_mlp = nn.Sequential(
@@ -174,38 +241,42 @@ class UNet(nn.Module):
         # Down Block (Encoder)
         cur_channels = init_dim
         cur_ressolutions = image_size
-                
         self.downs = nn.ModuleList([])
         skip_channels_list = [init_dim]
         
         for i in range(len(dim_mults)):
             dim_out = dim * dim_mults[i]
-            
             use_attn = (cur_ressolutions in attn_layers)
             
             for _ in range(num_res_blocks):
                 self.downs.append(nn.ModuleList([
-                    ResBlock(cur_channels, dim_out, time_emb_dim=time_dim),
+                    ResBlockType(cur_channels, dim_out, time_emb_dim=time_dim, dropout=dropout),
                     AttentionBlock(dim_out) if use_attn else nn.Identity()
                 ]))
                 cur_channels = dim_out
                 skip_channels_list.append(cur_channels)
      
             if i != len(dim_mults) - 1:
-                self.downs.append(Downsample(cur_channels))
+                if use_biggan_resample:
+                    self.downs.append(nn.ModuleList([
+                        ResBlockType(cur_channels, cur_channels, time_emb_dim=time_dim, dropout=dropout, downsample=True),
+                        nn.Identity()
+                    ]))
+                else:
+                    self.downs.append(Downsample(cur_channels))
+                    
                 cur_ressolutions = cur_ressolutions // 2
                 skip_channels_list.append(cur_channels)
 
         
         # Mid Block (Bottleneck)
-        self.mid_block1 = ResBlock(cur_channels, cur_channels, time_emb_dim=time_dim)
+        self.mid_block1 = ResBlockType(cur_channels, cur_channels, time_emb_dim=time_dim, dropout=dropout)
         self.mid_attn = AttentionBlock(cur_channels)
-        self.mid_block2 = ResBlock(cur_channels, cur_channels, time_emb_dim=time_dim)
+        self.mid_block2 = ResBlockType(cur_channels, cur_channels, time_emb_dim=time_dim, dropout=dropout)
         
         # Up Block (Decoder)
         self.ups = nn.ModuleList([])
 
-        
         for i in reversed(range(len(dim_mults))):
             dim_out = dim * dim_mults[i]
             use_attn = (cur_ressolutions in attn_layers)
@@ -213,13 +284,21 @@ class UNet(nn.Module):
             for _ in range(num_res_blocks + 1):
                 skip_channels = skip_channels_list.pop()
                 self.ups.append(nn.ModuleList([
-                    ResBlock(cur_channels + skip_channels, dim_out, time_emb_dim=time_dim),
+                    ResBlockType(cur_channels + skip_channels, dim_out, time_emb_dim=time_dim, dropout=dropout),
                     AttentionBlock(dim_out) if use_attn else nn.Identity(),
                 ]))
+                
                 cur_channels = dim_out
             
             if not i==0:
-                self.ups.append(Upsample(cur_channels))
+                if use_biggan_resample:
+                    self.ups.append(nn.ModuleList([
+                        ResBlockType(cur_channels, cur_channels, time_emb_dim=time_dim, dropout=dropout, upsample=True),
+                        nn.Identity()
+                    ]))
+                else:
+                    self.ups.append(Upsample(cur_channels))
+                    
                 cur_ressolutions = cur_ressolutions * 2
         
         # Final conv
@@ -229,7 +308,7 @@ class UNet(nn.Module):
             nn.Conv2d(dim, in_channels, 1)
         )
         
-    def forward(self, x, time):
+    def forward(self, x, time, y=None):
         """
         Args:
             x: Input Image (Batch, C, H, W)
@@ -239,10 +318,12 @@ class UNet(nn.Module):
         """
         time_emb = self.time_mlp(time)
         
-        x = self.init_conv(x)
-        skip_connections = []
+        if y is not None and self.label_emb is not None:
+            label_emb = self.label_emb(y)
+            time_emb = time_emb + label_emb
         
-        skip_connections.append(x)
+        x = self.init_conv(x)
+        skip_connections = [x]
         
         # Downsample
         for down_block in self.downs:
@@ -250,6 +331,7 @@ class UNet(nn.Module):
                 x = down_block(x)
                 skip_connections.append(x)
                 continue
+            
             res_block, attn_block = down_block
             x = res_block(x, time_emb)
             x = attn_block(x)
@@ -265,10 +347,16 @@ class UNet(nn.Module):
             if isinstance(up_block, Upsample):
                 x = up_block(x)
                 continue
+            
             res_block, attn_block = up_block
-            skip_connection = skip_connections.pop()
-            x = torch.cat((x, skip_connection), dim=1)
-            x = res_block(x, time_emb)
+            
+            if getattr(res_block, 'upsample', False):
+                x = res_block(x, time_emb)
+            else:
+                skip_connection = skip_connections.pop()
+                x = torch.cat((x, skip_connection), dim=1)
+                x = res_block(x, time_emb)
+                
             x = attn_block(x)
 
         x = self.final_conv(x)

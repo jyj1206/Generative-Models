@@ -26,7 +26,7 @@ def build_model(configs):
         model = VanillaGAN(generator, discriminator)
         
     elif model_type in ['ddpm', 'ddim']:
-        from models.Diffusion.unet import UNet
+        from models.Diffusion.nets.unet import UNet
         
         in_channels = int(configs["model"]['in_channels'])
         img_size = int(configs["model"]['img_size'])
@@ -36,6 +36,7 @@ def build_model(configs):
         attn_layers = configs["model"].get("attn_layers", [])
         
         dropout = float(configs["model"].get("dropout", 0.0))
+        num_classes = configs.get("dataset", {}).get("num_classes", None)
         model = UNet(
             dim=dim,
             dim_mults=dim_mults,
@@ -43,7 +44,8 @@ def build_model(configs):
             num_res_blocks=num_res_blocks,
             dropout=dropout,
             in_channels=in_channels,
-            image_size=img_size
+            image_size=img_size,
+            num_classes=num_classes
         )
     else:
         raise ValueError(f"Unknown model: {model_type}")
@@ -96,11 +98,13 @@ def build_optimizer(model, configs):
 
 
 def build_diffusion_scheduler(configs, device):
-    from models.Diffusion.diffusion_utils import linear_beta_schedule
+    from models.Diffusion.schedulers.gaussian_diffusion import linear_beta_schedule
     
     beta_start = float(configs["diffusion"]['beta_start'])
     beta_end = float(configs["diffusion"]['beta_end'])
     num_timesteps = int(configs["diffusion"]['num_timesteps'])
+    num_classes = configs.get("dataset", {}).get("num_classes", None)
+    null_token_idx = num_classes if num_classes is not None else None
 
     betas = linear_beta_schedule(
         timesteps=num_timesteps,
@@ -108,18 +112,16 @@ def build_diffusion_scheduler(configs, device):
         beta_end=beta_end
     )
     
-    
     scheduler = configs['diffusion'].get('diffuser', 'ddpm_scheduler')
-    scheduler_kwargs = {}
+    scheduler_kwargs = {"null_token_idx": null_token_idx}
     
     if scheduler == 'ddpm_scheduler':
-        from models.Diffusion.diffusion_utils import DDPMScheduler
+        from models.Diffusion.schedulers.ddpm_scheduler import DDPMScheduler
         variance_type = configs["diffusion"].get("variance_type", "fixed_small")
         scheduler_kwargs["variance_type"] = variance_type
         DiffusionScheduler = DDPMScheduler
-        
     elif scheduler == 'ddim_scheduler':
-        from models.Diffusion.diffusion_utils import DDIMScheduler
+        from models.Diffusion.schedulers.ddim_scheduler import DDIMScheduler
         DiffusionScheduler = DDIMScheduler
     else:
         raise ValueError(f"Unknown diffusion scheduler: {scheduler}")

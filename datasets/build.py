@@ -22,10 +22,16 @@ def build_dataset(configs):
         else:
             test_dataset = None
 
+    elif name == "imagenet":
+        from datasets.imagenet import get_imagenet_dataset
+        train_dataset = get_imagenet_dataset(root, train=True, configs=configs)
+        test_dataset = None  # TODO: Implement test dataset for ImageNet
+
     elif name == "custom":
         from datasets.custom import CustomDataset
         train_dataset = CustomDataset(configs)
-        test_dataset = None # TODO: Implement test dataset for custom dataset
+        test_dataset = None # TODO: Implement test dataset for custom dataset        
+
     else:
         raise ValueError(f"Unknown dataset: {name}")
 
