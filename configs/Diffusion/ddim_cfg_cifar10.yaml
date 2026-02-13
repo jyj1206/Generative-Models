@@ -1,0 +1,36 @@
+task: diffusion
+
+model:
+  type: ddim
+  img_size: 32
+  in_channels: 3 # RGB:3 / Grayscale:1
+  num_res_blocks: 2
+  dim: 64
+  dim_mults: [1, 2, 2, 2]
+  attn_layers: [8, 16, 32]
+  dropout: 0.1
+
+dataset:
+  name: cifar10 # custom / cifar10 / celeba_hq / imagenet
+  root: ./data
+  num_classes: 10 # 
+
+train:
+  epochs: 800
+  batch_size: 128
+  num_workers: 4
+  learning_rate: 0.0002
+  loss_fn: mse
+  optimizer: adam
+  ema: true
+  ema_decay: 0.9999
+
+diffusion:
+  diffuser: ddim_scheduler
+  num_timesteps: 1000
+  beta_start: 0.0001
+  beta_end: 0.02
+  variance_type: fixed_small
+  use_cfg: true  # Enable classifier-free guidance
+  p_uncond: 0.1  # Probability of unconditional training (null class)
+  guidance_scale: 3.0  # Guidance scale for sampling 

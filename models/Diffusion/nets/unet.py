@@ -151,7 +151,8 @@ class AdaptiveResBlock(nn.Module):
 class AttentionBlock(nn.Module):
     def __init__(self, dim, num_heads=4, dim_head=64): 
         super().__init__()
-        self.heads = dim // dim_head
+        self.heads = num_heads
+        self.dim_head = dim_head
         self.scale = dim_head ** -0.5
         inner_dim = dim_head * num_heads
         
@@ -164,10 +165,10 @@ class AttentionBlock(nn.Module):
         x_norm = self.norm(x)
         qkv = self.to_qkv(x_norm)
         q, k, v = qkv.chunk(3, dim=1)
-        
-        q = q.reshape(b, self.heads, c // self.heads, h * w)
-        k = k.reshape(b, self.heads, c // self.heads, h * w)
-        v = v.reshape(b, self.heads, c // self.heads, h * w)
+
+        q = q.reshape(b, self.heads, self.dim_head, h * w)
+        k = k.reshape(b, self.heads, self.dim_head, h * w)
+        v = v.reshape(b, self.heads, self.dim_head, h * w)
         
         attn = q.transpose(-2, -1) @ k * self.scale
         attn = attn.softmax(dim=-1)

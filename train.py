@@ -1,5 +1,20 @@
-import torch
 import os
+
+
+
+"""
+
+    GPU Setting
+
+"""
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
+
+
+
+
+import torch
 import argparse
 import yaml
 import copy
