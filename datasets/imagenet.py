@@ -18,7 +18,7 @@ def get_imagenet_dataset(root, configs, train=True):
     dataset = datasets.ImageNet(
         root=root,
         split='train' if train else 'val',
-        download=True,
+        download=False,
         transform=transform
     )
     
