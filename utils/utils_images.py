@@ -60,8 +60,18 @@ def _imwrite_unicode(path, img):
     return True
 
 
-def save_single_image(sample, save_path, scale=4):
-    img = sample[0].permute(1, 2, 0).squeeze().clamp(0, 1).cpu().numpy()
+def save_single_image(sample, save_path, scale=4, normalize=None):
+    tensor = sample[0].detach()
+
+    # Automatically bring tensors in [-1, 1] back to [0, 1] so inference outputs are not too dark
+    if normalize is None:
+        needs_norm = tensor.min().item() < 0.0 or tensor.max().item() > 1.0
+    else:
+        needs_norm = normalize
+    if needs_norm:
+        tensor = (tensor + 1) / 2
+
+    img = tensor.permute(1, 2, 0).squeeze().clamp(0, 1).cpu().numpy()
 
     if img.ndim == 2:
         ndarr = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
@@ -82,12 +92,19 @@ def save_single_image(sample, save_path, scale=4):
     _imwrite_unicode(save_path, bgr)
 
 
-def save_grid_image(x_t, save_path, scale=4, normalize=True):
-    if normalize:
-        x_t = (x_t + 1) / 2
-    x_t = x_t.clamp(0, 1)
+def save_grid_image(x_t, save_path, scale=4, normalize=None):
+    tensor = x_t.detach()
+
+    if normalize is None:
+        needs_norm = tensor.min().item() < 0.0 or tensor.max().item() > 1.0
+    else:
+        needs_norm = normalize
+    if needs_norm:
+        tensor = (tensor + 1) / 2
+
+    tensor = tensor.clamp(0, 1)
     nrow = int((x_t.size(0)) ** 0.5)
-    grid = make_grid(x_t, nrow=nrow, padding=2)
+    grid = make_grid(tensor, nrow=nrow, padding=2)
     ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
 
     if scale != 1:

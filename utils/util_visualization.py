@@ -49,21 +49,13 @@ def generate_and_save_samples(model, configs, device, diffusion=None, num_sample
     with torch.no_grad():
         if task == "vae":
             z = torch.randn(num_samples, model.latent_dim).to(device)
-            samples = model(z)
-            if configs["model"]['activation'] == 'tanh':
-                samples = (samples + 1) / 2
-            samples = samples.clamp(0, 1).cpu()
+            samples = model(z).detach().cpu()
             default_filename = f"generated_samples_epoch_{epoch}.png" if epoch else "generated_samples_final.png"
-            normalize = False
             
         elif task == "gan":
             z = torch.randn(num_samples, model.latent_dim).to(device)
-            samples = model(z)
-            if configs["model"]['activation'] == 'tanh':
-                samples = (samples + 1) / 2
-            samples = samples.clamp(0, 1).cpu()
+            samples = model(z).detach().cpu()
             default_filename = f"generated_samples_epoch_{epoch}.png" if epoch else "generated_samples_final.png"
-            normalize = False
             
         elif task == "diffusion":
             if diffusion is None:
@@ -97,9 +89,8 @@ def generate_and_save_samples(model, configs, device, diffusion=None, num_sample
                     model_kwargs=model_kwargs,
                     guidance_scale=guidance_scale
                 )
-            samples = samples.cpu()
+            samples = samples.detach().cpu()
             default_filename = f"diffusion_generated_samples_epoch_{epoch}.png" if epoch else "diffusion_generated_samples_final.png"
-            normalize = True
             
         else:
             raise ValueError(f"Unsupported task: {task}")
@@ -117,7 +108,7 @@ def generate_and_save_samples(model, configs, device, diffusion=None, num_sample
         os.makedirs(save_dir, exist_ok=True)
         save_path = os.path.join(save_dir, filename if filename else default_filename)
         
-        save_grid_image(samples, save_path, scale=scale, normalize=normalize)
+        save_grid_image(samples, save_path, scale=scale, normalize=None)
     
     return samples
 
@@ -244,7 +235,7 @@ def save_diffusion_sampling_gif(model, diffusion, configs, num_samples=16, captu
     # 5. Optionally save final image as grid
     if final_name is not None and save_dir is not None:
         final_path = os.path.join(save_dir, final_name)
-        save_grid_image(img, final_path, scale=scale, normalize=True)
+        save_grid_image(img, final_path, scale=scale, normalize=None)
 
 
 
