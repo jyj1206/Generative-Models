@@ -37,6 +37,7 @@ def build_model(configs):
         
         dropout = float(configs["model"].get("dropout", 0.0))
         num_classes = configs.get("dataset", {}).get("num_classes", None)
+        use_biggan_resample = bool(configs["model"].get("use_biggan_resample", False))
         model = UNet(
             dim=dim,
             dim_mults=dim_mults,
@@ -45,7 +46,8 @@ def build_model(configs):
             dropout=dropout,
             in_channels=in_channels,
             image_size=img_size,
-            num_classes=num_classes
+            num_classes=num_classes,
+            use_biggan_resample=use_biggan_resample
         )
     else:
         raise ValueError(f"Unknown model: {model_type}")

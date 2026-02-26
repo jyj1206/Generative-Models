@@ -9,6 +9,7 @@ model:
   dim_mults: [1, 2, 2, 2]
   attn_layers: [16]
   dropout: 0.1
+  use_biggan_resample: false
 
 dataset:
   name: cifar10

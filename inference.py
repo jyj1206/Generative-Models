@@ -6,7 +6,6 @@ import torch
 
 from models.build import build_model, build_diffusion_scheduler
 from utils.util_paths import append_timestamp, get_timestamp
-from utils.utils_images import save_single_image
 from utils.util_visualization import save_diffusion_sampling_gif, generate_and_save_samples
 
 
@@ -47,38 +46,6 @@ def load_checkpoint(model, model_path, device):
         model.load_state_dict(checkpoint)
 
 
-def generate_samples(model, configs, device, diffusion=None, sampling_steps=None, use_cfg=False,
-                     class_id=None, guidance_scale=1.0, num_samples=1, save_to_file=False,
-                     save_dir=None, filename=None, scale=4):
-    task = configs["task"]
-    model.eval()
-
-    if task == "vae":
-        generator = model.decoder
-    elif task == "gan":
-        generator = model.netG
-    else:
-        generator = model
-    
-    samples = generate_and_save_samples(
-        generator,
-        configs,
-        device,
-        diffusion=diffusion if task == "diffusion" else None,
-        num_samples=num_samples,
-        scale=scale,
-        use_cfg=use_cfg,
-        class_id=class_id,
-        guidance_scale=guidance_scale,
-        sampling_steps=sampling_steps,
-        save_dir=save_dir,
-        filename=filename,
-        save_to_file=save_to_file
-    )
-
-    return samples
-
-
 def main():
     args = parse_args()
     configs = yaml_loader(args.configs)
@@ -98,6 +65,15 @@ def main():
 
     load_checkpoint(model, args.model_path, device)
     model.to(device)
+    model.eval()
+
+    task = configs["task"]
+    if task == "vae":
+        generator = model.decoder
+    elif task == "gan":
+        generator = model.netG
+    else:
+        generator = model
 
     if args.seed is not None:
         torch.manual_seed(args.seed)
@@ -123,6 +99,8 @@ def main():
 
     grid_requested = args.grid_samples and args.grid_samples > 1
     num_to_sample = args.grid_samples if grid_requested else 1
+    single_filename = append_timestamp(args.out_name, timestamp)
+    single_path = os.path.join(inference_dir, single_filename)
     grid_filename = None
     grid_path = None
     if grid_requested:
@@ -132,28 +110,30 @@ def main():
         grid_filename = append_timestamp(grid_filename, timestamp)
         grid_path = os.path.join(inference_dir, grid_filename)
 
-    samples = generate_samples(
-        model,
+    generate_and_save_samples(
+        generator,
         configs,
         device,
-        diffusion=diffusion,
+        diffusion=diffusion if task == "diffusion" else None,
         sampling_steps=args.sampling_steps,
         use_cfg=use_cfg,
         class_id=args.class_id,
         guidance_scale=args.guidance_scale,
         num_samples=num_to_sample,
-        save_to_file=grid_requested,
-        save_dir=inference_dir if grid_requested else None,
-        filename=grid_filename,
-        scale=args.scale
+        save_to_file=True,
+        save_dir=inference_dir,
+        filename=grid_filename if grid_requested else single_filename,
+        scale=args.scale,
+        save_format="grid" if grid_requested else "single"
     )
-    save_path = os.path.join(inference_dir, append_timestamp(args.out_name, timestamp))
-    save_single_image(samples[:1], save_path, scale=args.scale)
+
     elapsed = time.perf_counter() - start_time
-    print(f"Saved single sample: {save_path}")
-    print(f"Inference time: {elapsed:.3f} sec")
     if grid_requested and grid_path is not None:
         print(f"Saved grid sample: {grid_path}")
+    else:
+        print(f"Saved single sample: {single_path}")
+
+    print(f"Inference time: {elapsed:.3f} sec")
 
     if configs["task"] == "diffusion" and args.diffusion_gif:
         gif_name = append_timestamp(args.gif_name, timestamp)

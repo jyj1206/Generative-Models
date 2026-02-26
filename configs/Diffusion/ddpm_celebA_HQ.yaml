@@ -12,6 +12,7 @@ model:
   attn_layers: [16]
   
   dropout: 0.0
+  use_biggan_resample: false
 
 dataset:
   name: custom
