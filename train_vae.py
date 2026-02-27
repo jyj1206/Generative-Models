@@ -19,9 +19,6 @@ from utils.util_save import save_vae_checkpoint
 from utils.util_paths import build_output_dir
 
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a Vanilla VAE model.")
     parser.add_argument("--config", type=str, required=True)
@@ -66,14 +63,12 @@ def build_dataloaders(configs):
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=True,
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True,
     )
     return train_loader, test_loader
 
@@ -132,7 +127,7 @@ def main():
 
             optimizer.zero_grad()
             outputs = model(inputs)
-            loss = criterion(outputs, inputs)
+            loss = criterion(outputs, inputs, epoch=epoch)
             loss.backward()
             optimizer.step()
 
@@ -140,7 +135,7 @@ def main():
             iterations += 1
             pbar.set_postfix({"loss": f"{loss.item():.4f}", "iter": iterations})
 
-        avg_train_loss = train_loss_sum / len(train_loader.dataset)
+        avg_train_loss = train_loss_sum / len(train_loader)
         train_loss_history.append(avg_train_loss)
 
         model.eval()
@@ -150,10 +145,10 @@ def main():
             for test_inputs, _ in test_loader:
                 test_inputs = test_inputs.to(device)
                 outputs = model(test_inputs)
-                test_loss = criterion(outputs, test_inputs)
+                test_loss = criterion(outputs, test_inputs, epoch=epoch)
                 test_loss_sum += test_loss.item()
 
-        avg_test_loss = test_loss_sum / len(test_loader.dataset)
+        avg_test_loss = test_loss_sum / len(test_loader)
         test_loss_history.append(avg_test_loss)
 
         print(

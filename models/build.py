@@ -9,9 +9,8 @@ def build_model(configs):
         latent_dim = int(configs["model"]["latent_dim"])
         img_size = int(configs["model"]["img_size"])
         in_channels = int(configs["model"]['in_channels'])
-        activation = configs["model"]['activation']
         encoder = Encoder(in_channels=in_channels, latent_dim=latent_dim, img_size=img_size)
-        decoder = Decoder(out_channels=in_channels, latent_dim=latent_dim, img_size=img_size, activation=activation)
+        decoder = Decoder(out_channels=in_channels, latent_dim=latent_dim, img_size=img_size)
         model = VanillaVAE(encoder, decoder, latent_dim)
     
     elif model_type == 'vanila_gan':
@@ -61,24 +60,27 @@ def build_loss_function(configs):
 
     if model_type == 'vanila_vae':
         beta = float(configs["train"].get("beta", 0.1))
-        if loss_type == "mse":
+        warmup_epochs = int(configs["train"].get("kl_warmup_epochs", 0))
+    
+        if loss_type == 'mse':
             from models.VAE.vae_loss import vae_loss_function_mse
-
-            def loss_fn(outputs, inputs):
-                return vae_loss_function_mse(outputs, inputs, beta=beta)
-
-        elif loss_type == "bce":
-            from models.VAE.vae_loss import vae_loss_function_bce
-
-            def loss_fn(outputs, inputs):
-                return vae_loss_function_bce(outputs, inputs, beta=beta)
+            def loss_fn(outputs, inputs, epoch=None):
+                current_beta = beta
+                if epoch is not None and warmup_epochs > 0:
+                    progress = min(1.0, float(epoch) / float(warmup_epochs))
+                    current_beta = beta * progress
+                return vae_loss_function_mse(outputs, inputs, beta=current_beta)
         else:
             raise ValueError(f"Unknown loss function: {loss_type}")
+        
+        
         
     elif model_type == 'vanila_gan':
         if loss_type == 'bce':
             from models.GANs.gan_loss import vanila_gan_loss
             loss_fn = vanila_gan_loss()
+        else:
+            raise ValueError(f"Unknown loss function: {loss_type}")
             
     elif model_type == 'ddpm':
         # Diffusion loss is implemented in the scheduler/model training loop.

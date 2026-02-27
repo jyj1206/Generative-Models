@@ -5,7 +5,6 @@ model:
   img_size: 32
   in_channels: 3 # RGB:3 / Grayscale:1
   latent_dim: 128
-  activation: tanh
 
 dataset:
   name: cifar10
@@ -17,7 +16,8 @@ train:
   num_workers: 4
   learning_rate: 1e-3
   weight_decay: 1e-5
-  beta: 0.1
+  beta: 0.02
+  kl_warmup_epochs: 50
   loss_fn: mse
   optimizer: adam
 

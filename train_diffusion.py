@@ -1,4 +1,7 @@
 import os
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
 import math
 import copy
 import argparse
@@ -18,9 +21,6 @@ from utils.util_visualization import (
 )
 from utils.util_save import save_diffusion_checkpoint
 from utils.util_paths import build_output_dir
-
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 def parse_args():

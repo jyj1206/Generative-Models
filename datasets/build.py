@@ -12,16 +12,6 @@ def build_dataset(configs):
         else:
             test_dataset = None
 
-    elif name == "mnist":
-        from datasets.mnist import get_mnist_dataset
-        
-        train_dataset = get_mnist_dataset(root, train=True)
-        
-        if task == 'vae':
-            test_dataset = get_mnist_dataset(root, train=False)
-        else:
-            test_dataset = None
-
     elif name == "imagenet":
         from datasets.imagenet import get_imagenet_dataset
         train_dataset = get_imagenet_dataset(root, train=True, configs=configs)

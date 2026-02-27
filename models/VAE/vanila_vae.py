@@ -51,7 +51,7 @@ class Encoder(nn.Module):
         
 
 class Decoder(nn.Module):
-    def __init__(self, out_channels=3, latent_dim=128, img_size=32, activation='sigmoid'):
+    def __init__(self, out_channels=3, latent_dim=128, img_size=32):
         super(Decoder, self).__init__()
         
         self.latent_dim = latent_dim
@@ -65,11 +65,8 @@ class Decoder(nn.Module):
         self.deconv3 = nn.ConvTranspose2d(32, out_channels, 4, stride=2, padding=1)
         
         self.relu = nn.ReLU()
-        
-        if activation == 'tanh':
-            self.activation = nn.Tanh()
-        else:
-            self.activation = nn.Sigmoid()
+    
+        self.activation = nn.Tanh()
         
     def forward(self, x):
         x = self.fc(x)
@@ -89,7 +86,7 @@ if __name__ == "__main__":
     LATENT_DIM = 100
     
     encoder = Encoder(in_channels=3, latent_dim=LATENT_DIM, img_size=IMG_SIZE)
-    decoder = Decoder(out_channels=3, latent_dim=LATENT_DIM, img_size=IMG_SIZE, activation='sigmoid')
+    decoder = Decoder(out_channels=3, latent_dim=LATENT_DIM, img_size=IMG_SIZE)
     
     model = VanillaVAE(encoder, decoder, latent_dim=LATENT_DIM)
     
