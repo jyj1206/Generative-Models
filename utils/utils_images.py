@@ -60,36 +60,37 @@ def _imwrite_unicode(path, img):
     return True
 
 
-def save_single_image(sample, save_path, scale=4, normalize=None):
-    tensor = sample[0].detach()
+# # 일단 사용 안함
+# def save_single_image(sample, save_path, scale=4, normalize=None):
+#     tensor = sample[0].detach()
 
-    # Automatically bring tensors in [-1, 1] back to [0, 1] so inference outputs are not too dark
-    if normalize is None:
-        needs_norm = tensor.min().item() < 0.0 or tensor.max().item() > 1.0
-    else:
-        needs_norm = normalize
-    if needs_norm:
-        tensor = (tensor + 1) / 2
+#     # Automatically bring tensors in [-1, 1] back to [0, 1] so inference outputs are not too dark
+#     if normalize is None:
+#         needs_norm = tensor.min().item() < 0.0 or tensor.max().item() > 1.0
+#     else:
+#         needs_norm = normalize
+#     if needs_norm:
+#         tensor = (tensor + 1) / 2
 
-    img = tensor.permute(1, 2, 0).squeeze().clamp(0, 1).cpu().numpy()
+#     img = tensor.permute(1, 2, 0).squeeze().clamp(0, 1).cpu().numpy()
 
-    if img.ndim == 2:
-        ndarr = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
-        if scale != 1:
-            new_width = int(ndarr.shape[1] * scale)
-            new_height = int(ndarr.shape[0] * scale)
-            ndarr = cv2.resize(ndarr, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
-        _imwrite_unicode(save_path, ndarr)
-        return
+#     if img.ndim == 2:
+#         ndarr = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
+#         if scale != 1:
+#             new_width = int(ndarr.shape[1] * scale)
+#             new_height = int(ndarr.shape[0] * scale)
+#             ndarr = cv2.resize(ndarr, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
+#         _imwrite_unicode(save_path, ndarr)
+#         return
 
-    ndarr = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
-    if scale != 1:
-        new_width = int(ndarr.shape[1] * scale)
-        new_height = int(ndarr.shape[0] * scale)
-        ndarr = cv2.resize(ndarr, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
+#     ndarr = (img * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
+#     if scale != 1:
+#         new_width = int(ndarr.shape[1] * scale)
+#         new_height = int(ndarr.shape[0] * scale)
+#         ndarr = cv2.resize(ndarr, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
 
-    bgr = cv2.cvtColor(ndarr, cv2.COLOR_RGB2BGR)
-    _imwrite_unicode(save_path, bgr)
+#     bgr = cv2.cvtColor(ndarr, cv2.COLOR_RGB2BGR)
+#     _imwrite_unicode(save_path, bgr)
 
 
 def save_grid_image(x_t, save_path, scale=4, normalize=None):

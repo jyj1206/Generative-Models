@@ -60,12 +60,18 @@ def build_loss_function(configs):
     model_type = configs["model"]["type"]
 
     if model_type == 'vanila_vae':
+        beta = float(configs["train"].get("beta", 0.1))
         if loss_type == "mse":
             from models.VAE.vae_loss import vae_loss_function_mse
-            loss_fn = vae_loss_function_mse
+
+            def loss_fn(outputs, inputs):
+                return vae_loss_function_mse(outputs, inputs, beta=beta)
+
         elif loss_type == "bce":
             from models.VAE.vae_loss import vae_loss_function_bce
-            loss_fn = vae_loss_function_bce
+
+            def loss_fn(outputs, inputs):
+                return vae_loss_function_bce(outputs, inputs, beta=beta)
         else:
             raise ValueError(f"Unknown loss function: {loss_type}")
         

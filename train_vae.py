@@ -9,7 +9,6 @@ from tqdm import tqdm
 
 from datasets.build import build_dataset
 from models.build import build_model, build_loss_function, build_optimizer
-from utils.util_makegif import TrainRecorder
 from utils.util_visualization import (
     generate_and_save_samples,
     save_loss_curve,
@@ -113,8 +112,6 @@ def main():
     optimizer = build_optimizer(model, configs)
     num_epochs = compute_num_epochs(train_loader, configs)
 
-    recorder = TrainRecorder(configs, device, num_samples=16, scale=args.scale)
-
     train_loss_history = []
     test_loss_history = []
     start_epoch = 0
@@ -145,7 +142,6 @@ def main():
         train_loss_history.append(avg_train_loss)
 
         model.eval()
-        recorder.record_frame(model.decoder, epoch)
 
         test_loss_sum = 0.0
         with torch.no_grad():
@@ -191,8 +187,6 @@ def main():
                 scale=args.scale,
             )
             save_vae_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations)
-
-    recorder.save_gif()
 
     model.eval()
     generate_and_save_samples(model.decoder, configs, device, num_samples=16, scale=args.scale)

@@ -3,7 +3,7 @@ import torch
 from matplotlib import pyplot as plt
 from utils.util_makegif import SampleRecorder
 from utils.util_paths import get_output_dir
-from utils.utils_images import save_single_image, save_grid_image
+from utils.utils_images import save_grid_image
 
 
 def save_loss_curve(configs, loss_history1, loss_history2=None,
@@ -43,23 +43,7 @@ def save_loss_curve(configs, loss_history1, loss_history2=None,
     plt.close() 
 
 
-def generate_and_save_samples(
-    model,
-    configs,
-    device,
-    diffusion=None,
-    num_samples=16,
-    epoch=None,
-    scale=4,
-    use_cfg=False,
-    class_id=None,
-    guidance_scale=None,
-    sampling_steps=None,
-    save_dir=None,
-    filename=None,
-    save_to_file=True,
-    save_format="grid",
-):
+def generate_and_save_samples(model, configs, device, diffusion=None, num_samples=16, epoch=None, scale=4, use_cfg=False, class_id=None, guidance_scale=None, sampling_steps=None, save_dir=None, filename=None, save_to_file=True):
     task = configs.get("task")
     
     with torch.no_grad():
@@ -123,11 +107,8 @@ def generate_and_save_samples(
         
         os.makedirs(save_dir, exist_ok=True)
         save_path = os.path.join(save_dir, filename if filename else default_filename)
-
-        if save_format == "single":
-            save_single_image(samples[:1], save_path, scale=scale, normalize=None)
-        else:
-            save_grid_image(samples, save_path, scale=scale, normalize=None)
+        
+        save_grid_image(samples, save_path, scale=scale, normalize=None)
     
     return samples
 
