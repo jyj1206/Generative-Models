@@ -9,12 +9,10 @@ from tqdm import tqdm
 
 from datasets.build import build_dataset
 from models.build import build_model, build_loss_function, build_optimizer
+from utils.util_makegif import TrainRecorder
 from utils.util_visualization import generate_and_save_samples, save_loss_curve
 from utils.util_save import save_gan_checkpoint
 from utils.util_paths import build_output_dir
-
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 def parse_args():
@@ -99,6 +97,7 @@ def main():
     optimizer_g = build_optimizer(model.netG, configs)
     optimizer_d = build_optimizer(model.netD, configs)
     num_epochs = compute_num_epochs(train_loader, configs)
+    train_recorder = TrainRecorder(configs, device, num_samples=16, scale=args.scale)
 
     loss_g_history = []
     loss_d_history = []
@@ -158,6 +157,10 @@ def main():
             f"Loss G: {avg_loss_g:.4f}"
         )
 
+        model.netG.eval()
+        train_recorder.record_frame(model.netG, epoch)
+        model.netG.train()
+
         if epoch % 25 == 0:
             generate_and_save_samples(model.netG, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
             save_gan_checkpoint(
@@ -173,6 +176,7 @@ def main():
 
     model.eval()
     generate_and_save_samples(model.netG, configs, device, num_samples=16, scale=args.scale)
+    train_recorder.save_gif(filename="training_process.gif", duration=100)
     save_loss_curve(configs, loss_g_history, loss_d_history, "Generator Loss", "Discriminator Loss")
     save_gan_checkpoint(
         model,

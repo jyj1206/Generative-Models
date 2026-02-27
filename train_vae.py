@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 from datasets.build import build_dataset
 from models.build import build_model, build_loss_function, build_optimizer
+from utils.util_makegif import TrainRecorder
 from utils.util_visualization import (
     generate_and_save_samples,
     save_loss_curve,
@@ -111,6 +112,7 @@ def main():
     criterion = build_loss_function(configs)
     optimizer = build_optimizer(model, configs)
     num_epochs = compute_num_epochs(train_loader, configs)
+    train_recorder = TrainRecorder(configs, device, num_samples=16, scale=args.scale)
 
     train_loss_history = []
     test_loss_history = []
@@ -159,6 +161,10 @@ def main():
             f"Test Loss: {avg_test_loss:.4f}"
         )
 
+        model.decoder.eval()
+        train_recorder.record_frame(model.decoder, epoch)
+        model.train()
+
         if epoch % 20 == 0:
             generate_and_save_samples(
                 model.decoder,
@@ -190,6 +196,7 @@ def main():
 
     model.eval()
     generate_and_save_samples(model.decoder, configs, device, num_samples=16, scale=args.scale)
+    train_recorder.save_gif(filename="training_process.gif", duration=100)
     save_vae_recon_grid(model, configs, test_loader, device, scale=args.scale)
     save_loss_curve(configs, train_loss_history, test_loss_history)
     save_vae_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True)
