@@ -17,8 +17,8 @@ def parse_args():
     parser.add_argument('--scale', type=int, default=4)
     parser.add_argument('--seed', type=int)
     parser.add_argument('--diffusion_gif', action='store_true')
-    parser.add_argument('--grid_samples', type=int, default=0,
-                        help="If >1, also save a grid of this many samples alongside the single image.")
+    parser.add_argument('--grid_samples', type=int, default=1,
+                        help="If 1, save a single image. If >1, save one grid image with that many samples.")
     parser.add_argument('--sampling_steps', type=int, default=None)
     parser.add_argument('--guidance_scale', type=float, default=1.0)
     parser.add_argument('--class_id', type=int, default=None)
@@ -99,16 +99,14 @@ def main():
 
     grid_requested = args.grid_samples and args.grid_samples > 1
     num_to_sample = args.grid_samples if grid_requested else 1
-    single_filename = append_timestamp(args.out_name, timestamp)
-    single_path = os.path.join(inference_dir, single_filename)
-    grid_filename = None
-    grid_path = None
+    _, out_ext = os.path.splitext(args.out_name)
+    out_ext = out_ext if out_ext else ".png"
     if grid_requested:
-        base, ext = os.path.splitext(args.out_name)
-        ext = ext if ext else ".png"
-        grid_filename = f"{base}_grid{ext}"
-        grid_filename = append_timestamp(grid_filename, timestamp)
-        grid_path = os.path.join(inference_dir, grid_filename)
+        save_filename = append_timestamp(f"gridx{num_to_sample}_sample{out_ext}", timestamp)
+        save_path = os.path.join(inference_dir, save_filename)
+    else:
+        save_filename = append_timestamp(f"single_sample{out_ext}", timestamp)
+        save_path = os.path.join(inference_dir, save_filename)
 
     generate_and_save_samples(
         generator,
@@ -122,16 +120,15 @@ def main():
         num_samples=num_to_sample,
         save_to_file=True,
         save_dir=inference_dir,
-        filename=grid_filename if grid_requested else single_filename,
+        filename=save_filename,
         scale=args.scale,
-        save_format="grid" if grid_requested else "single"
     )
 
     elapsed = time.perf_counter() - start_time
-    if grid_requested and grid_path is not None:
-        print(f"Saved grid sample: {grid_path}")
+    if grid_requested:
+        print(f"Saved grid sample: {save_path}")
     else:
-        print(f"Saved single sample: {single_path}")
+        print(f"Saved single sample: {save_path}")
 
     print(f"Inference time: {elapsed:.3f} sec")
 
