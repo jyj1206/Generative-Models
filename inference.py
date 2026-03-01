@@ -12,7 +12,7 @@ from utils.util_visualization import save_diffusion_sampling_gif, generate_and_s
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', type=str, required=True)
-    parser.add_argument('--configs', type=str, required=True)
+    parser.add_argument('--config', type=str, required=True)
     parser.add_argument('--out_name', type=str, default='single_sample.png')
     parser.add_argument('--scale', type=int, default=4)
     parser.add_argument('--seed', type=int)
