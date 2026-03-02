@@ -50,8 +50,6 @@ def build_dataloaders(configs):
     num_workers = configs["train"]["num_workers"]
 
     train_dataset, test_dataset = build_dataset(configs)
-    if test_dataset is None:
-        raise ValueError("VAE training requires a test dataset for reconstruction monitoring.")
 
     train_loader = DataLoader(
         train_dataset,
@@ -59,12 +57,14 @@ def build_dataloaders(configs):
         shuffle=True,
         num_workers=num_workers,
     )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-    )
+    test_loader = None
+    if test_dataset is not None:
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+        )
     return train_loader, test_loader
 
 
@@ -112,6 +112,7 @@ def main():
 
     output_dir = prepare_output_dir(configs, args.config, args.resume)
     train_loader, test_loader = build_dataloaders(configs)
+    has_test_loader = test_loader is not None
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -207,36 +208,40 @@ def main():
             disc_loss_history.append(avg_disc_train_loss)
             disc_loss_epochs.append(epoch)
 
-        model.eval()
+        avg_test_loss = None
+        if has_test_loader:
+            model.eval()
 
-        test_loss_sum = 0.0
-        with torch.no_grad():
-            for test_inputs, _ in test_loader:
-                test_inputs = test_inputs.to(device)
-                outputs, kl_loss = model(test_inputs)
-                test_loss = recon_criterion(outputs, test_inputs)
-                regularization_loss = kl_beta * kl_loss
-                test_loss = test_loss + regularization_loss
-                test_loss_sum += test_loss.item()
+            test_loss_sum = 0.0
+            with torch.no_grad():
+                for test_inputs, _ in test_loader:
+                    test_inputs = test_inputs.to(device)
+                    outputs, kl_loss = model(test_inputs)
+                    test_loss = recon_criterion(outputs, test_inputs)
+                    regularization_loss = kl_beta * kl_loss
+                    test_loss = test_loss + regularization_loss
+                    test_loss_sum += test_loss.item()
 
-        avg_test_loss = test_loss_sum / len(test_loader)
-        test_loss_history.append(avg_test_loss)
+            avg_test_loss = test_loss_sum / len(test_loader)
+            test_loss_history.append(avg_test_loss)
 
-        print(
-            f"Epoch [{epoch}/{num_epochs}] Done. | G Loss: {avg_train_loss:.4f} | "
-            f"D Loss: {avg_disc_train_loss:.4f} | Test Loss: {avg_test_loss:.4f}"
-        )
+        log_message = f"Epoch [{epoch}/{num_epochs}] Done. | G Loss: {avg_train_loss:.4f} | D Loss: {avg_disc_train_loss:.4f}"
+        if avg_test_loss is not None:
+            log_message += f" | Test Loss: {avg_test_loss:.4f}"
+        print(log_message)
 
         if epoch % 20 == 0:
             save_vae_recon_grid(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
-            save_vae_recon_grid(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
             save_vqvae_latent(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
-            save_vqvae_latent(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
+            if has_test_loader:
+                save_vae_recon_grid(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
+                save_vqvae_latent(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
             save_vqvae_checkpoint(models, optimizers, {"loss_g": avg_train_loss, "loss_d": avg_disc_train_loss}, configs, epoch, iterations)
 
     model.eval()
-    save_vae_recon_grid(model, configs, test_loader, device, scale=args.scale)
-    save_vqvae_latent(model, configs, test_loader, device, train=False, scale=args.scale)
+    if has_test_loader:
+        save_vae_recon_grid(model, configs, test_loader, device, scale=args.scale)
+        save_vqvae_latent(model, configs, test_loader, device, train=False, scale=args.scale)
     save_loss_curve(configs, train_loss_history, disc_loss_history, "Generator Loss", "Discriminator Loss", x_history1=list(range(start_epoch + 1, start_epoch + len(train_loss_history) + 1)), x_history2=disc_loss_epochs)
     save_vqvae_checkpoint(models, optimizers, {"loss_g": avg_train_loss, "loss_d": avg_disc_train_loss}, configs, num_epochs, iterations, final=True)
 

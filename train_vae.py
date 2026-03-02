@@ -51,8 +51,6 @@ def build_dataloaders(configs):
     num_workers = configs["train"]["num_workers"]
 
     train_dataset, test_dataset = build_dataset(configs)
-    if test_dataset is None:
-        raise ValueError("VAE training requires a test dataset for reconstruction monitoring.")
 
     train_loader = DataLoader(
         train_dataset,
@@ -60,12 +58,14 @@ def build_dataloaders(configs):
         shuffle=True,
         num_workers=num_workers,
     )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-    )
+    test_loader = None
+    if test_dataset is not None:
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+        )
     return train_loader, test_loader
 
 
@@ -96,6 +96,7 @@ def main():
 
     output_dir = prepare_output_dir(configs, args.config, args.resume)
     train_loader, test_loader = build_dataloaders(configs)
+    has_test_loader = test_loader is not None
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(configs).to(device)
@@ -134,23 +135,25 @@ def main():
         avg_train_loss = train_loss_sum / len(train_loader)
         train_loss_history.append(avg_train_loss)
 
-        model.eval()
+        avg_test_loss = None
+        if has_test_loader:
+            model.eval()
 
-        test_loss_sum = 0.0
-        with torch.no_grad():
-            for test_inputs, _ in test_loader:
-                test_inputs = test_inputs.to(device)
-                outputs = model(test_inputs)
-                test_loss = criterion(outputs, test_inputs, epoch=epoch)
-                test_loss_sum += test_loss.item()
+            test_loss_sum = 0.0
+            with torch.no_grad():
+                for test_inputs, _ in test_loader:
+                    test_inputs = test_inputs.to(device)
+                    outputs = model(test_inputs)
+                    test_loss = criterion(outputs, test_inputs, epoch=epoch)
+                    test_loss_sum += test_loss.item()
 
-        avg_test_loss = test_loss_sum / len(test_loader)
-        test_loss_history.append(avg_test_loss)
+            avg_test_loss = test_loss_sum / len(test_loader)
+            test_loss_history.append(avg_test_loss)
 
-        print(
-            f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.4f} | "
-            f"Test Loss: {avg_test_loss:.4f}"
-        )
+        log_message = f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.4f}"
+        if avg_test_loss is not None:
+            log_message += f" | Test Loss: {avg_test_loss:.4f}"
+        print(log_message)
 
         model.decoder.eval()
         train_recorder.record_frame(model.decoder, epoch)
@@ -159,14 +162,18 @@ def main():
         if epoch % 20 == 0:
             generate_and_save_samples(model.decoder, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
             save_vae_recon_grid(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
-            save_vae_recon_grid(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
+            if has_test_loader:
+                save_vae_recon_grid(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
             save_vae_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations)
 
     model.eval()
     generate_and_save_samples(model.decoder, configs, device, num_samples=16, scale=args.scale)
     train_recorder.save_gif(filename="training_process.gif", duration=100)
-    save_vae_recon_grid(model, configs, test_loader, device, scale=args.scale)
-    save_loss_curve(configs, train_loss_history, test_loss_history)
+    if has_test_loader:
+        save_vae_recon_grid(model, configs, test_loader, device, scale=args.scale)
+        save_loss_curve(configs, train_loss_history, test_loss_history)
+    else:
+        save_loss_curve(configs, train_loss_history)
     save_vae_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True)
 
 
