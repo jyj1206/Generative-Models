@@ -126,8 +126,8 @@ def build_loss_function(configs):
     elif task == 'gan':    
         if model_type == 'vanila_gan':
             if loss_type == 'bce':
-                from models.GAN.gan_loss import vanila_gan_loss
-                loss_fn = vanila_gan_loss()
+                from models.GAN.gan_loss import vanila_gan_loss_bce
+                loss_fn = vanila_gan_loss_bce()
             else:
                 raise ValueError(f"Unknown loss function: {loss_type}")
         else:

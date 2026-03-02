@@ -14,8 +14,8 @@ def vanila_vae_loss_function_mse(outputs, inputs, beta=0.1):
     return recon_loss + beta * kl_loss
 
 
-def vae_kl_loss(output):
-    mu, logvar = torch.chunk(output, 2, dim=1)
+def vae_kl_loss(outputs):
+    mu, logvar = torch.chunk(outputs, 2, dim=1)
     
     kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=(1, 2, 3)).mean()
     
