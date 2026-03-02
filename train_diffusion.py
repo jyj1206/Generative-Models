@@ -14,11 +14,7 @@ from tqdm import tqdm
 from datasets.build import build_dataset
 from models.build import build_model, build_optimizer, build_diffusion_scheduler
 from utils.util_ema import ema_update
-from utils.util_visualization import (
-    generate_and_save_samples,
-    save_diffusion_sampling_gif,
-    save_loss_curve,
-)
+from utils.util_visualization import generate_and_save_samples, save_diffusion_sampling_gif, save_loss_curve
 from utils.util_save import save_diffusion_checkpoint
 from utils.util_paths import build_output_dir
 
@@ -186,58 +182,15 @@ def main():
 
         if epoch % 25 == 0:
             reference_model = ema_model if ema_enabled else model
-            generate_and_save_samples(
-                reference_model,
-                configs,
-                device,
-                diffusion=diffusion,
-                num_samples=16,
-                epoch=epoch,
-                scale=args.scale,
-                use_cfg=use_cfg,
-            )
-            save_diffusion_checkpoint(
-                model,
-                optimizer,
-                avg_train_loss,
-                configs,
-                epoch,
-                iterations,
-                final=False,
-                ema_model=ema_model if ema_enabled else None,
-            )
+            generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, epoch=epoch, scale=args.scale, use_cfg=use_cfg)
+            save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if ema_enabled else None)
 
     reference_model = ema_model if ema_enabled else model
     model.eval()
-    generate_and_save_samples(
-        reference_model,
-        configs,
-        device,
-        diffusion=diffusion,
-        num_samples=16,
-        scale=args.scale,
-        use_cfg=use_cfg,
-    )
-    save_diffusion_sampling_gif(
-        reference_model,
-        diffusion,
-        configs,
-        num_samples=16,
-        capture_interval=20,
-        scale=args.scale,
-        use_cfg=use_cfg,
-    )
+    generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, scale=args.scale, use_cfg=use_cfg)
+    save_diffusion_sampling_gif(reference_model, diffusion, configs, num_samples=16, capture_interval=20, scale=args.scale, use_cfg=use_cfg)
     save_loss_curve(configs, train_loss_history)
-    save_diffusion_checkpoint(
-        model,
-        optimizer,
-        avg_train_loss,
-        configs,
-        num_epochs,
-        iterations,
-        final=True,
-        ema_model=ema_model if ema_enabled else None,
-    )
+    save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True, ema_model=ema_model if ema_enabled else None)
 
 
 if __name__ == "__main__":

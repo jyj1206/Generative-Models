@@ -26,8 +26,9 @@ class TrainRecorder:
         with torch.no_grad():
             # 1. 이미지 생성 (기존 동일)
             generated = model(self.fixed_z)
-            if self.configs['model']['activation'] == 'tanh':
-                generated = (generated + 1) / 2
+            
+            # 후처리: [-1, 1] -> [0, 1] 
+            generated = (generated + 1) / 2
             generated = generated.clamp(0, 1)
             
             # 2. 그리드 만들기 (기존 동일)

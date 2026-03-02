@@ -57,5 +57,31 @@ def save_diffusion_checkpoint(model, optimizer, loss, configs, epoch, iterations
         'optimizer_state_dict': optimizer.state_dict(),
         'loss': loss,
     }, checkpoint_path)
+
+
+def save_vqvae_checkpoint(models, optimizers, losses, configs, epoch, iterations, final=False):
+    output_dir = get_output_dir(configs)
+    if final:
+        vqvae_checkpoint_path = os.path.join(output_dir, "checkpoints", "vqvae_autoencoder_final.pth")
+        disc_checkpoint_path = os.path.join(output_dir, "checkpoints", "vqvae_discriminator_final.pth")
+    else:
+        vqvae_checkpoint_path = os.path.join(output_dir, "checkpoints", f"vqvae_autoencoder_epoch_{epoch}.pth")
+        disc_checkpoint_path = os.path.join(output_dir, "checkpoints", f"vqvae_discriminator_epoch_{epoch}.pth")
+
+    torch.save({
+        'epoch': epoch,
+        'iterations': iterations,
+        'vqvae_state_dict': models['vqvae'].state_dict(),
+        'optimizer_g_state_dict': optimizers['optimizer_g'].state_dict(),
+        'loss_g': losses.get('loss_g', None),
+    }, vqvae_checkpoint_path)
+
+    torch.save({
+        'epoch': epoch,
+        'iterations': iterations,
+        'discriminator_state_dict': models['discriminator'].state_dict(),
+        'optimizer_d_state_dict': optimizers['optimizer_d'].state_dict(),
+        'loss_d': losses.get('loss_d', None),
+    }, disc_checkpoint_path)
     
     

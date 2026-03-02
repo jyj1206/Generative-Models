@@ -2,89 +2,144 @@ import torch
 
 
 def build_model(configs):
+    task = configs["task"]
     model_type = configs["model"]["type"]
 
-    if model_type == "vanila_vae":
-        from models.VAE.vanila_vae import VanillaVAE, Encoder, Decoder
-        latent_dim = int(configs["model"]["latent_dim"])
-        img_size = int(configs["model"]["img_size"])
-        in_channels = int(configs["model"]['in_channels'])
-        encoder = Encoder(in_channels=in_channels, latent_dim=latent_dim, img_size=img_size)
-        decoder = Decoder(out_channels=in_channels, latent_dim=latent_dim, img_size=img_size)
-        model = VanillaVAE(encoder, decoder, latent_dim)
-    
-    elif model_type == 'vanila_gan':
-        from models.GANs.vanila_gan import VanillaGAN, Generator, Discriminator
-        in_channels = int(configs["model"]['in_channels'])
-        latent_dim = int(configs["model"]["latent_dim"])
-        img_size = int(configs["model"]["img_size"])
+    if task == 'vae':
+        if model_type == "vanila_vae":
+            from models.VAE.nets.vanila_vae import VanillaVAE
+            from models.VAE.nets.encoder.vanila_encoder import Encoder
+            from models.VAE.nets.decoder.vanila_decoder import Decoder
+            encoder = Encoder(
+                in_channels=int(configs["model"]["in_channels"]),
+                latent_dim=int(configs["model"]["latent_dim"]),
+                img_size=int(configs["model"]["img_size"]),
+            )
+            decoder = Decoder(
+                out_channels=int(configs["model"]["in_channels"]),
+                latent_dim=int(configs["model"]["latent_dim"]),
+                img_size=int(configs["model"]["img_size"]),
+            )
+            model = VanillaVAE(encoder, decoder, int(configs["model"]["latent_dim"]))
+        elif model_type == "vqvae":
+            reg_type = configs["model"].get("reg_type", "vq")
+            from models.VAE.nets.vqvae import VQVAE
+            from models.VAE.nets.vae import VAE
+            from models.others.lpips import LPIPS
+            from models.GAN.nets.discriminator.patch_gan_discriminator import Discriminator
+            
+            if reg_type == "vq":
+                autoencoder = VQVAE(
+                    in_channels=int(configs["model"]['in_channels']),
+                    z_channels=int(configs["model"]["latent_dim"]),
+                    codebook_size=int(configs["model"]["num_embeddings"]),
+                )
+            elif reg_type == "kl":
+                autoencoder = VAE(
+                    in_channels=int(configs["model"]['in_channels']),
+                    z_channels=int(configs["model"]["latent_dim"]),
+                )
+            else:
+                raise ValueError(f"Unknown regularization type for vqvae model: {reg_type}")
+
+            model = {
+                'vqvae': autoencoder,
+                'lpips': LPIPS(),
+                'discriminator': Discriminator(in_channels=int(configs["model"]['in_channels']))
+            }
+        else:
+            raise ValueError(f"Unknown VAE model: {model_type}")
         
-        generator = Generator(out_channels=in_channels, latent_dim=latent_dim, img_size=img_size)
-        discriminator = Discriminator(in_channels=in_channels, img_size=img_size)
-        
-        model = VanillaGAN(generator, discriminator)
-        
-    elif model_type in ['ddpm', 'ddim']:
-        from models.Diffusion.nets.unet import UNet
-        
-        in_channels = int(configs["model"]['in_channels'])
-        img_size = int(configs["model"]['img_size'])
-        dim = int(configs["model"]['dim'])
-        dim_mults = configs["model"]['dim_mults']
-        num_res_blocks = int(configs["model"].get("num_res_blocks", 2))
-        attn_layers = configs["model"].get("attn_layers", [])
-        
-        dropout = float(configs["model"].get("dropout", 0.0))
-        num_classes = configs.get("dataset", {}).get("num_classes", None)
-        use_biggan_resample = bool(configs["model"].get("use_biggan_resample", False))
-        model = UNet(
-            dim=dim,
-            dim_mults=dim_mults,
-            attn_layers=attn_layers,
-            num_res_blocks=num_res_blocks,
-            dropout=dropout,
-            in_channels=in_channels,
-            image_size=img_size,
-            num_classes=num_classes,
-            use_biggan_resample=use_biggan_resample
-        )
+    elif task == 'gan':
+        if model_type == 'vanila_gan':
+            from models.GAN.nets.vanila_gan import VanillaGAN
+            from models.GAN.nets.generator.vanila_generator import Generator
+            from models.GAN.nets.discriminator.vanila_discriminator import Discriminator
+            generator = Generator(
+                out_channels=int(configs["model"]["in_channels"]),
+                latent_dim=int(configs["model"]["latent_dim"]),
+                img_size=int(configs["model"]["img_size"]),
+            )
+            discriminator = Discriminator(
+                in_channels=int(configs["model"]["in_channels"]),
+                img_size=int(configs["model"]["img_size"]),
+            )
+            
+            model = VanillaGAN(generator, discriminator)
+        else:
+            raise ValueError(f"Unknown GAN model: {model_type}")
+
+    elif task == 'diffusion':   
+        if model_type in ['ddpm', 'ddim']:
+            from models.Diffusion.nets.unet import UNet
+
+            model = UNet(
+                dim=int(configs["model"]["dim"]),
+                dim_mults=configs["model"]["dim_mults"],
+                attn_layers=configs["model"].get("attn_layers", []),
+                num_res_blocks=int(configs["model"].get("num_res_blocks", 2)),
+                dropout=float(configs["model"].get("dropout", 0.0)),
+                in_channels=int(configs["model"]["in_channels"]),
+                image_size=int(configs["model"]["img_size"]),
+                num_classes=configs.get("dataset", {}).get("num_classes", None),
+                use_biggan_resample=bool(configs["model"].get("use_biggan_resample", False)),
+            )
+        else:
+             raise ValueError(f"Unknown diffusion model: {model_type}")
+         
     else:
-        raise ValueError(f"Unknown model: {model_type}")
+        raise ValueError(f"Unknown task: {task}")
 
     return model
 
 
 def build_loss_function(configs):
-    loss_type = configs["train"]['loss_fn']
+    task = configs["task"]
+    loss_type = configs["train"].get('loss_fn', None)
     model_type = configs["model"]["type"]
-
-    if model_type == 'vanila_vae':
-        beta = float(configs["train"].get("beta", 0.1))
-        warmup_epochs = int(configs["train"].get("kl_warmup_epochs", 0))
     
-        if loss_type == 'mse':
-            from models.VAE.vae_loss import vae_loss_function_mse
-            def loss_fn(outputs, inputs, epoch=None):
-                current_beta = beta
-                if epoch is not None and warmup_epochs > 0:
-                    progress = min(1.0, float(epoch) / float(warmup_epochs))
-                    current_beta = beta * progress
-                return vae_loss_function_mse(outputs, inputs, beta=current_beta)
-        else:
-            raise ValueError(f"Unknown loss function: {loss_type}")
+    if task == 'vae':
+        if model_type == 'vanila_vae':
+            beta = float(configs["train"].get("beta", 0.1))
+            warmup_epochs = int(configs["train"].get("kl_warmup_epochs", 0))
         
-        
-        
-    elif model_type == 'vanila_gan':
-        if loss_type == 'bce':
-            from models.GANs.gan_loss import vanila_gan_loss
-            loss_fn = vanila_gan_loss()
-        else:
-            raise ValueError(f"Unknown loss function: {loss_type}")
+            if loss_type == 'mse':
+                from models.VAE.vae_loss import vanila_vae_loss_function_mse
+                def loss_fn(outputs, inputs, epoch=None):
+                    current_beta = beta
+                    if epoch is not None and warmup_epochs > 0:
+                        progress = min(1.0, float(epoch) / float(warmup_epochs))
+                        current_beta = beta * progress
+                    return vanila_vae_loss_function_mse(outputs, inputs, beta=current_beta)
+            else:
+                raise ValueError(f"Unknown loss function: {loss_type}")
             
-    elif model_type == 'ddpm':
-        # Diffusion loss is implemented in the scheduler/model training loop.
-        loss_fn = None
+        elif model_type == 'vqvae':
+            loss_fn = {
+                'recon_criterion': torch.nn.MSELoss(),
+                'discriminator_criterion': torch.nn.BCEWithLogitsLoss(),
+            }   
+        else:
+            raise ValueError(f"Unknown VAE model: {model_type}")
+             
+        
+    elif task == 'gan':    
+        if model_type == 'vanila_gan':
+            if loss_type == 'bce':
+                from models.GAN.gan_loss import vanila_gan_loss
+                loss_fn = vanila_gan_loss()
+            else:
+                raise ValueError(f"Unknown loss function: {loss_type}")
+        else:
+            raise ValueError(f"Unknown GAN model: {model_type}")
+                
+    elif task == 'diffusion':
+        if model_type in ['ddpm', 'ddim']:
+            # Diffusion loss is implemented in the scheduler/model training loop.
+            loss_fn = None
+        else:
+            raise ValueError(f"Unknown diffusion model: {model_type}")
+                
     else:
         raise ValueError(f"Unknown model: {model_type}")
 
@@ -92,43 +147,45 @@ def build_loss_function(configs):
 
 
 def build_optimizer(model, configs):
+    model_type = configs["model"]["type"]
     optim_type = configs["train"]['optimizer']
     learning_rate = float(configs["train"]['learning_rate'])
     weight_decay = float(configs["train"].get("weight_decay", 0))
     adam_betas = (float(configs["train"].get("beta1", 0.9)), float(configs["train"].get("beta2", 0.999)))
     
-    if optim_type == "adam":
-        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=adam_betas)
-    elif optim_type == "sgd":
-        optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    if model_type == 'vqvae':
+        optimizer = {
+            'optimizer_g': torch.optim.Adam(model['vqvae'].parameters(), lr=learning_rate, betas=adam_betas),
+            'optimizer_d': torch.optim.Adam(model['discriminator'].parameters(), lr=learning_rate, betas=adam_betas)
+        }
     else:
-        raise ValueError(f"Unknown optimizer: {optim_type}")
+        if optim_type == "adam":
+            optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=adam_betas)
+        elif optim_type == "sgd":
+            optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        else:
+            raise ValueError(f"Unknown optimizer: {optim_type}")
 
     return optimizer
 
 
 def build_diffusion_scheduler(configs, device):
     from models.Diffusion.schedulers.gaussian_diffusion import linear_beta_schedule
-    
-    beta_start = float(configs["diffusion"]['beta_start'])
-    beta_end = float(configs["diffusion"]['beta_end'])
+
     num_timesteps = int(configs["diffusion"]['num_timesteps'])
-    num_classes = configs.get("dataset", {}).get("num_classes", None)
-    null_token_idx = num_classes if num_classes is not None else None
 
     betas = linear_beta_schedule(
         timesteps=num_timesteps,
-        beta_start=beta_start,
-        beta_end=beta_end
+        beta_start=float(configs["diffusion"]['beta_start']),
+        beta_end=float(configs["diffusion"]['beta_end'])
     )
-    
+
     scheduler = configs['diffusion'].get('diffuser', 'ddpm_scheduler')
-    scheduler_kwargs = {"null_token_idx": null_token_idx}
+    scheduler_kwargs = {"null_token_idx": configs.get("dataset", {}).get("num_classes", None)}
     
     if scheduler == 'ddpm_scheduler':
         from models.Diffusion.schedulers.ddpm_scheduler import DDPMScheduler
-        variance_type = configs["diffusion"].get("variance_type", "fixed_small")
-        scheduler_kwargs["variance_type"] = variance_type
+        scheduler_kwargs["variance_type"] = configs["diffusion"].get("variance_type", "fixed_small")
         DiffusionScheduler = DDPMScheduler
     elif scheduler == 'ddim_scheduler':
         from models.Diffusion.schedulers.ddim_scheduler import DDIMScheduler

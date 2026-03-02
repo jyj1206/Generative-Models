@@ -10,11 +10,7 @@ from tqdm import tqdm
 from datasets.build import build_dataset
 from models.build import build_model, build_loss_function, build_optimizer
 from utils.util_makegif import TrainRecorder
-from utils.util_visualization import (
-    generate_and_save_samples,
-    save_loss_curve,
-    save_vae_recon_grid,
-)
+from utils.util_visualization import generate_and_save_samples, save_loss_curve, save_vae_recon_grid
 from utils.util_save import save_vae_checkpoint
 from utils.util_paths import build_output_dir
 
@@ -161,32 +157,9 @@ def main():
         model.train()
 
         if epoch % 20 == 0:
-            generate_and_save_samples(
-                model.decoder,
-                configs,
-                device,
-                num_samples=16,
-                epoch=epoch,
-                scale=args.scale,
-            )
-            save_vae_recon_grid(
-                model,
-                configs,
-                train_loader,
-                device,
-                epoch,
-                train=True,
-                scale=args.scale,
-            )
-            save_vae_recon_grid(
-                model,
-                configs,
-                test_loader,
-                device,
-                epoch,
-                train=False,
-                scale=args.scale,
-            )
+            generate_and_save_samples(model.decoder, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
+            save_vae_recon_grid(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
+            save_vae_recon_grid(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
             save_vae_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations)
 
     model.eval()

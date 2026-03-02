@@ -163,32 +163,13 @@ def main():
 
         if epoch % 25 == 0:
             generate_and_save_samples(model.netG, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
-            save_gan_checkpoint(
-                model,
-                optimizer_g,
-                optimizer_d,
-                avg_loss_g,
-                avg_loss_d,
-                configs,
-                epoch,
-                iterations,
-            )
+            save_gan_checkpoint(model, optimizer_g, optimizer_d, avg_loss_g, avg_loss_d, configs, epoch, iterations)
 
     model.eval()
     generate_and_save_samples(model.netG, configs, device, num_samples=16, scale=args.scale)
     train_recorder.save_gif(filename="training_process.gif", duration=100)
     save_loss_curve(configs, loss_g_history, loss_d_history, "Generator Loss", "Discriminator Loss")
-    save_gan_checkpoint(
-        model,
-        optimizer_g,
-        optimizer_d,
-        avg_loss_g,
-        avg_loss_d,
-        configs,
-        num_epochs,
-        iterations,
-        final=True,
-    )
+    save_gan_checkpoint(model, optimizer_g, optimizer_d, avg_loss_g, avg_loss_d, configs, num_epochs, iterations, final=True)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,25 @@
+task: vae
+
+model:
+  type: vqvae
+  regularization: vq
+  img_size: 256
+  in_channels: 3
+  latent_dim: 4
+  num_embeddings: 8192
+  commitment_cost: 0.2
+
+dataset:
+  name: custom
+  root: ./data/celeba_hq_256
+
+train:
+  epochs: 20
+  batch_size: 16
+  num_workers: 4
+  learning_rate: 0.0005
+  weight_decay: 0.0
+  optimizer: adam
+  beta1: 0.5
+  beta2: 0.999
+  disc_step_start: 15000

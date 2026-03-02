@@ -5,7 +5,6 @@ model:
   img_size: 32
   in_channels: 3 # RGB:3 / Grayscale:1
   latent_dim: 100
-  activation: tanh
 
 dataset:
   name: cifar10

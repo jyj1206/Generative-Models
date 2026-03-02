@@ -53,3 +53,5 @@ wheels/
 
 # Checkpoints (if any temporary ones)
 *.pth.tmp
+
+*.pth

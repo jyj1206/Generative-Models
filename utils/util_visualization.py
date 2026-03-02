@@ -7,7 +7,8 @@ from utils.utils_images import save_grid_image
 
 
 def save_loss_curve(configs, loss_history1, loss_history2=None,
-                         name1="Train Loss", name2="Test Loss"):
+                    name1="Train Loss", name2="Test Loss",
+                    x_history1=None, x_history2=None):
     
     has_second_loss = loss_history2 is not None and len(loss_history2) > 0
     
@@ -17,14 +18,16 @@ def save_loss_curve(configs, loss_history1, loss_history2=None,
     if num_plots == 1:
         axes = [axes]
 
-    axes[0].plot(loss_history1, label=name1, color='blue')
+    x1 = x_history1 if x_history1 is not None else list(range(1, len(loss_history1) + 1))
+    axes[0].plot(x1, loss_history1, label=name1, color='blue')
     axes[0].set_title(name1)
     axes[0].set_xlabel("Epochs")
     axes[0].set_ylabel("Loss")
     axes[0].grid(True)
 
     if has_second_loss:
-        axes[1].plot(loss_history2, label=name2, color='orange')
+        x2 = x_history2 if x_history2 is not None else list(range(1, len(loss_history2) + 1))
+        axes[1].plot(x2, loss_history2, label=name2, color='orange')
         axes[1].set_title(name2)
         axes[1].set_xlabel("Epochs")
         axes[1].set_ylabel("Loss")
@@ -120,11 +123,15 @@ def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=Fa
         images = images.to(device)
         
         x = images
-        x_hat, _, _ = model(images)
+        model_outputs = model(images)
+        if isinstance(model_outputs, (tuple, list)):
+            x_hat = model_outputs[0]
+        else:
+            x_hat = model_outputs
         
-        if configs["model"]['activation'] == 'tanh':
-            x = (x + 1) / 2  # Convert from [-1, 1] to [0, 1]
-            x_hat = (x_hat + 1) / 2  # Convert from [-1, 1] to [0, 1]
+        # 후처리: [-1, 1] -> [0, 1]
+        x = (x + 1) / 2  # Convert from [-1, 1] to [0, 1]
+        x_hat = (x_hat + 1) / 2  # Convert from [-1, 1] to [0, 1]
             
         x = x.clamp(0, 1).cpu()
         x_hat = x_hat.clamp(0, 1).cpu()
@@ -156,6 +163,32 @@ def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=Fa
             plt.savefig(os.path.join(output_dir, "visualization", "train" if train else "test", f"reconstructions_epoch_{epoch}.png"))
         
         plt.close()
+
+
+def save_vqvae_latent(model, configs, dataloader, device, epoch=None, train=False, scale=4):
+    with torch.no_grad():
+        images, _ = next(iter(dataloader))
+        images = images.to(device)
+        quant_out, _ = model.encode(images)
+
+    if quant_out.size(1) == 1:
+        latent_rgb = quant_out.repeat(1, 3, 1, 1)
+    elif quant_out.size(1) >= 3:
+        latent_rgb = quant_out[:, :3, :, :]
+    else:
+        zero_channel = torch.zeros_like(quant_out[:, :1, :, :])
+        latent_rgb = torch.cat([quant_out, zero_channel], dim=1)
+
+    output_dir = get_output_dir(configs)
+    save_dir = os.path.join(output_dir, "visualization", "train" if train else "test", "latent")
+    os.makedirs(save_dir, exist_ok=True)
+
+    if epoch is None:
+        save_path = os.path.join(save_dir, "quant_out.png")
+    else:
+        save_path = os.path.join(save_dir, f"quant_out_epoch_{epoch}.png")
+
+    save_grid_image(latent_rgb.detach().cpu(), save_path, scale=scale)
 
 
 def save_diffusion_sampling_gif(model, diffusion, configs, num_samples=16, capture_interval=20, scale=4, use_cfg=False, class_id=None, guidance_scale=None, save_dir=None, filename="sampling_process.gif", final_name=None, duration=200, sampling_steps=None):
