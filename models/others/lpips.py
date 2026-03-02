@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torchvision
 from collections import namedtuple
+from torchvision.models import vgg16 as tv_vgg16, VGG16_Weights
 
 
 def spatial_average(x, keepdim=True):
@@ -14,8 +15,10 @@ class vgg16(nn.Module):
     def __init__(self, requires_grad=False, pretrained=True):
         super().__init__()
         
+        weights = VGG16_Weights.DEFAULT if pretrained else None
+        
         # Load pretrained vgg model
-        vgg_pretrained_features = torchvision.models.vgg16(pretrained=pretrained).features
+        vgg_pretrained_features = tv_vgg16(weights=weights).features
         self.slice1 = nn.Sequential()
         self.slice2 = nn.Sequential()
         self.slice3 = nn.Sequential()
@@ -75,7 +78,8 @@ class LPIPS(nn.Module):
         self.lin2 = NetLinearLayer(self.channels[2], use_dropout=use_dropout)
         self.lin3 = NetLinearLayer(self.channels[3], use_dropout=use_dropout)
         self.lin4 = NetLinearLayer(self.channels[4], use_dropout=use_dropout)
-
+        self.lins = [self.lin0, self.lin1, self.lin2, self.lin3, self.lin4]
+        self.lins = nn.ModuleList(self.lins)
 
         model_path = os.path.abspath(
             os.path.join(inspect.getfile(self.__init__), '..', f'weights/v{version}/{net}.pth')
@@ -91,9 +95,9 @@ class LPIPS(nn.Module):
             
     def forward(self, input1, input2, normalize=False):
         # Sclae the inputs to -1 to +1 range if needed
-        if normalize:
-            input1 = self.scaling_layer(input1)
-            input2 = self.scaling_layer(input2)
+        if normalize:  
+            input1 = 2 * input1 - 1
+            input2 = 2 * input2 - 1
             
         input1_vgg, input2_vgg = self.scaling_layer(input1), self.scaling_layer(input2)
         
@@ -104,10 +108,13 @@ class LPIPS(nn.Module):
             features1[kk], features2[kk] = torch.nn.functional.normalize(out1[kk], dim=1), torch.nn.functional.normalize(out2[kk], dim=1)
             diffs[kk] = (features1[kk] - features2[kk]) ** 2
             
+        # 1x1 convolution followed by spatial average on the square differences
         res = [spatial_average(self.lins[kk](diffs[kk]), keepdim=True) for kk in range(self.len_channels)]
+        val = 0
         
-        val = sum(res)
-        
+        # Aggregate the results of each layer
+        for l in range(self.len_channels):
+            val += res[l]
         return val
 
 
@@ -126,7 +133,7 @@ class ScalingLayer(nn.Module):
     
     
 class NetLinearLayer(nn.Module):
-    def __init__(self, in_channels, out_channels, use_dropout=False):
+    def __init__(self, in_channels, out_channels=1, use_dropout=False):
         super().__init__()
         
         self.model = nn.Sequential(

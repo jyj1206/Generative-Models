@@ -1,4 +1,4 @@
-from torch.nn import nn
+import torch.nn as nn
 
 
 class Discriminator(nn.Module):
@@ -14,11 +14,11 @@ class Discriminator(nn.Module):
         self.layers = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(layers_dim[i], layers_dim[i+1],
-                          kerenel_size=kernels[i],
+                          kernel_size=kernels[i],
                           stride=strides[i], 
                           padding=paddings[i], 
                           bias=False if i!=0 else True),
-                nn.BatchNorm2d(layers_dim[i+1]) if i != 0 else nn.Identity(),
+                nn.BatchNorm2d(layers_dim[i + 1]) if i != len(layers_dim) - 2 and i != 0 else nn.Identity(),
                 nn.LeakyReLU(0.2) if i != len(layers_dim)-2 else nn.Identity()
             ) for i in range(len(layers_dim)-1)
         ])

@@ -130,7 +130,7 @@ def main():
     iterations = 0
 
     model = models['vqvae'].to(device)
-    lpips_model = models['lpips'].to(device)
+    lpips_model = models['lpips'].eval().to(device)
     discriminator = models['discriminator'].to(device)
 
     recon_criterion = criterions['recon_criterion']
@@ -159,7 +159,6 @@ def main():
             inputs = inputs.to(device)
 
             optimizer_g.zero_grad()
-            optimizer_d.zero_grad()
 
             step_count += 1
 
@@ -171,9 +170,13 @@ def main():
             g_loss = recon_loss + regularization_loss
 
             if step_count > disc_step_start:
+                discriminator.eval()  # freeze BN running stats + disable dropout while computing G's adversarial loss
+                discriminator.requires_grad_(False)   # don't accumulate grads for D params; only backprop to G through outputs
                 disc_fake_pred = discriminator(outputs)
-                disc_fake_loss = discriminator_criterion(disc_fake_pred, torch.ones_like(disc_fake_pred, device=device))
+                disc_fake_loss = discriminator_criterion(disc_fake_pred, torch.ones_like(disc_fake_pred))
                 g_loss += 0.5 * disc_fake_loss
+                discriminator.requires_grad_(True)
+                discriminator.train()
 
             lpips_loss = torch.mean(lpips_model(outputs, inputs))
             g_loss += lpips_loss
@@ -181,12 +184,13 @@ def main():
             optimizer_g.step()
 
             if step_count > disc_step_start:
+                optimizer_d.zero_grad()
                 fake = outputs
                 disc_fake_pred = discriminator(fake.detach())
                 disc_real_pred = discriminator(inputs)
-                disc_fake_loss = discriminator_criterion(disc_fake_pred, torch.zeros_like(disc_fake_pred, device=device))
-                discriminator_real_loss = discriminator_criterion(disc_real_pred, torch.ones_like(disc_real_pred, device=device))
-                d_loss = 0.5 * (disc_fake_loss + discriminator_real_loss) / 2
+                disc_fake_loss = discriminator_criterion(disc_fake_pred, torch.zeros_like(disc_fake_pred))
+                discriminator_real_loss = discriminator_criterion(disc_real_pred, torch.ones_like(disc_real_pred))
+                d_loss = (disc_fake_loss + discriminator_real_loss) / 2
                 d_loss.backward()
                 optimizer_d.step()
             else:
@@ -230,7 +234,7 @@ def main():
             log_message += f" | Test Loss: {avg_test_loss:.4f}"
         print(log_message)
 
-        if epoch % 20 == 0:
+        if epoch % 5 == 0:
             save_vae_recon_grid(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
             save_vqvae_latent(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
             if has_test_loader:
