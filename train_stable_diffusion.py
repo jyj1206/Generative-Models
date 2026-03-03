@@ -14,7 +14,7 @@ from tqdm import tqdm
 from datasets.build import build_dataset
 from models.build import build_model, build_optimizer, build_diffusion_scheduler
 from utils.util_ema import ema_update
-from utils.util_visualization import generate_and_save_samples, save_diffusion_sampling_gif, save_loss_curve
+from utils.util_visualization import generate_and_save_samples, save_stable_diffusion_sampling_gif, save_loss_curve
 from utils.util_save import save_diffusion_checkpoint
 from utils.util_logger import setup_train_logger
 from utils.util_paths import build_output_dir
@@ -110,6 +110,33 @@ def load_resume_state(model, optimizer, device, resume_path, ema_model=None, res
     return start_epoch, iterations
 
 
+def load_vae_checkpoint(vae, configs, device):
+    checkpoint_path = configs["first_stage"].get("checkpoint_path", None)
+    
+    if checkpoint_path is not None and os.path.exists(checkpoint_path):
+        print(f"Loading VAE checkpoint from: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+
+        if isinstance(checkpoint, dict):
+            if "vqvae_state_dict" in checkpoint:
+                state_dict = checkpoint["vqvae_state_dict"]
+            elif all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
+                state_dict = checkpoint
+            else:
+                raise KeyError("Checkpoint must contain 'vqvae_state_dict")
+        else:
+            state_dict = checkpoint
+
+        vae.load_state_dict(state_dict)
+       
+        for param in vae.parameters():
+            param.requires_grad = False
+    else:
+        raise ValueError(f"VAE checkpoint not found at: {checkpoint_path}")
+
+    return vae
+
+
 def main():
     args = parse_args()
     configs = yaml_loader(args.config)
@@ -120,18 +147,20 @@ def main():
     train_loader = build_dataloader(configs)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = build_model(configs).to(device)
-
-    optimizer = build_optimizer(model, configs)
+    models = build_model(configs)
+    
+    vae = models['first_stage'].to(device)
+    model = models['second_stage'].to(device)
+    
+    # Load VAE
+    vae = load_vae_checkpoint(vae, configs, device)
+    vae.eval()
+    
+    optimizer = build_optimizer(model, configs)   
+    
     diffusion, num_timesteps = build_diffusion_scheduler(configs, device)
     num_epochs = compute_num_epochs(train_loader, configs)
-
-    diffusion_cfg = configs.get("diffusion", {})
-    use_cfg = diffusion_cfg.get("use_cfg", False)
-    p_uncond = float(diffusion_cfg.get("p_uncond", 0.0)) if use_cfg else 0.0
-    if use_cfg and configs.get("dataset", {}).get("num_classes") is None:
-        raise ValueError("Classifier-free guidance requires dataset.num_classes in the config.")
-
+    
     ema_model, ema_decay = setup_ema_model(model, configs, device)
     ema_enabled = ema_model is not None
 
@@ -148,27 +177,22 @@ def main():
             ema_model=ema_model,
             resume_ema_path=args.resume_ema,
         )
-
+        
     for epoch in range(start_epoch + 1, num_epochs + 1):
         model.train()
         train_loss_sum = 0.0
         pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{num_epochs}]")
 
-        for inputs, labels in pbar:
+        for inputs, _ in pbar:
             inputs = inputs.to(device)
-            model_kwargs = None
-
-            if use_cfg:
-                labels = labels.to(device)
-                if p_uncond > 0.0:
-                    drop_mask = torch.rand(labels.shape, device=device) < p_uncond
-                    labels = labels.clone()
-                    labels[drop_mask] = diffusion.null_token_idx
-                model_kwargs = {"y": labels}
 
             optimizer.zero_grad()
+            
+            with torch.no_grad():
+                z = vae.encode(inputs)
+            
             t = torch.randint(0, num_timesteps, (inputs.size(0),), device=device).long()
-            loss = diffusion.p_losses(model, inputs, t, model_kwargs=model_kwargs)
+            loss = diffusion.p_losses(model, z, t)
             loss.backward()
             optimizer.step()
 
@@ -184,18 +208,29 @@ def main():
         print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.4f}")
 
         if epoch % 25 == 0:
-            reference_model = ema_model if ema_enabled else model
-            reference_model.eval()
-            generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, epoch=epoch, scale=args.scale, use_cfg=use_cfg)
+            reference_model = {
+                "first_stage": vae,
+                "second_stage": ema_model if ema_enabled else model,
+            }
+            reference_model["first_stage"].eval()
+            reference_model["second_stage"].eval()
+            generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, epoch=epoch, scale=args.scale,)
             save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if ema_enabled else None)
 
-    reference_model = ema_model if ema_enabled else model
-    reference_model.eval()
-    generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, scale=args.scale, use_cfg=use_cfg)
-    save_diffusion_sampling_gif(reference_model, diffusion, configs, num_samples=16, capture_interval=20, scale=args.scale, use_cfg=use_cfg)
+    reference_model = {
+        "first_stage": vae,
+        "second_stage": ema_model if ema_enabled else model,
+    }
+    reference_model["first_stage"].eval()
+    reference_model["second_stage"].eval()
+    generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, scale=args.scale)
+    save_stable_diffusion_sampling_gif(reference_model, diffusion, configs, num_samples=16, capture_interval=20, scale=args.scale)
     save_loss_curve(configs, train_loss_history)
     save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True, ema_model=ema_model if ema_enabled else None)
 
 
 if __name__ == "__main__":
-    main()
+    main()    
+
+  
+

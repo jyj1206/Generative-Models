@@ -187,13 +187,16 @@ class UpBlock(nn.Module):
             ]
         )
         
-        if self.up_sample:
-            self.up_sample_conv = nn.Sequential(
-                nn.Upsample(scale_factor=2, mode="nearest"),
-                nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
-            )
-        else:
-            self.up_sample_conv = nn.Identity()
+        # TODO: test용
+        self.up_sample_conv = nn.ConvTranspose2d(in_channels, out_channels, 4, 2, 1) if self.up_sample else nn.Identity()
+        
+        # if self.up_sample:
+        #     self.up_sample_conv = nn.Sequential(
+        #         nn.Upsample(scale_factor=2, mode="nearest"),
+        #         nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
+        #     )
+        # else:
+        #     self.up_sample_conv = nn.Identity()
 
     def forward(self, x):
         out = self.up_sample_conv(x)

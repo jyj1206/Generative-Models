@@ -94,7 +94,33 @@ def generate_and_save_samples(model, configs, device, diffusion=None, num_sample
                 )
             samples = samples.detach().cpu()
             default_filename = f"diffusion_generated_samples_epoch_{epoch}.png" if epoch else "diffusion_generated_samples_final.png"
+        
+        elif task == "stable_diffusion":
+            if diffusion is None:
+                raise ValueError("Diffusion scheduler is required for stable diffusion task.")
             
+            vae = model['first_stage']
+            model = model['second_stage']
+            vae.eval()
+            model.eval()
+            
+            z_shape = (num_samples, configs["model"]['in_channels'], configs["model"]['img_size'], configs["model"]['img_size'])
+            if hasattr(diffusion, "_set_timesteps"):
+                if sampling_steps is None:
+                    sampling_steps = int(configs.get("diffusion", {}).get("sampling_steps", 50))
+                latent = diffusion.p_sample_loop(
+                    model,
+                    shape=z_shape,
+                    sampling_steps=sampling_steps,
+                )
+            else:
+                latent = diffusion.p_sample_loop(
+                    model,
+                    shape=z_shape,
+                )           
+            samples = vae.decode(latent)
+            samples = samples.detach().cpu()
+            default_filename = f"stable_diffusion_generated_samples_epoch_{epoch}.png" if epoch else "stable_diffusion_generated_samples_final.png"
         else:
             raise ValueError(f"Unsupported task: {task}")
     
@@ -269,6 +295,58 @@ def save_diffusion_sampling_gif(model, diffusion, configs, num_samples=16, captu
     if final_name is not None and save_dir is not None:
         final_path = os.path.join(save_dir, final_name)
         save_grid_image(img, final_path, scale=scale, normalize=None)
+
+
+def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=16, capture_interval=20, scale=4, save_dir=None, filename="sampling_process.gif", final_name=None, duration=200, sampling_steps=None):
+    vae = models["first_stage"]
+    model = models["second_stage"]
+    vae.eval()
+    model.eval()
+    device = diffusion.betas.device
+
+    if save_dir is not None:
+        recorder = SampleRecorder(configs, device=device, save_filename=filename, save_dir=save_dir, scale=scale)
+    else:
+        recorder = SampleRecorder(configs, device=device, scale=scale)
+
+    img_size = configs["model"]["img_size"]
+    channels = configs["model"]["in_channels"]
+    latent = torch.randn((num_samples, channels, img_size, img_size), device=device)
+
+    print("Stable diffusion sampling process visualization started...")
+
+    with torch.no_grad():
+        if hasattr(diffusion, "_set_timesteps"):
+            if sampling_steps is None:
+                sampling_steps = int(configs.get("diffusion", {}).get("sampling_steps", 50))
+            diffusion._set_timesteps(sampling_steps)
+            total_steps = len(diffusion.timesteps)
+
+            for i in range(total_steps):
+                t_val = diffusion.timesteps[i]
+                t = torch.full((num_samples,), t_val, device=device, dtype=torch.long)
+                latent = diffusion.p_sample(model, latent, t, i)
+
+                if i % capture_interval == 0 or i == total_steps - 1:
+                    decoded = vae.decode(latent)
+                    recorder.record_step(decoded, t=int(t_val.item()))
+        else:
+            total_steps = len(diffusion.betas)
+
+            for i in reversed(range(total_steps)):
+                t = torch.full((num_samples,), i, device=device, dtype=torch.long)
+                latent = diffusion.p_sample(model, latent, t)
+
+                if i % capture_interval == 0 or i == 0:
+                    decoded = vae.decode(latent)
+                    recorder.record_step(decoded, t=i)
+
+    recorder.save_gif(duration=duration)
+
+    if final_name is not None and save_dir is not None:
+        final_path = os.path.join(save_dir, final_name)
+        final_img = vae.decode(latent)
+        save_grid_image(final_img.detach().cpu(), final_path, scale=scale, normalize=None)
 
 
 

@@ -43,7 +43,6 @@ def prepare_output_dir(configs, config_path, resume_path):
 
     os.makedirs(os.path.join(output_dir, "checkpoints"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "visualization", "train"), exist_ok=True)
-    os.makedirs(os.path.join(output_dir, "visualization", "test"), exist_ok=True)
     return output_dir
 
 
@@ -100,6 +99,8 @@ def main():
     print(f"Logging to: {logger.log_path}")
     train_loader, test_loader = build_dataloaders(configs)
     has_test_loader = test_loader is not None
+    if has_test_loader:
+        os.makedirs(os.path.join(output_dir, "visualization", "test"), exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(configs).to(device)

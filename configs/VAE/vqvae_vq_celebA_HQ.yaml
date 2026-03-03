@@ -2,7 +2,7 @@ task: vae
 
 model:
   type: vqvae
-  regularization: vq
+  reg_type: vq
   disc_init_weights: false
   img_size: 256
   in_channels: 3

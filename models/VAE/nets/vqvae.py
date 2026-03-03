@@ -172,3 +172,30 @@ class VQVAE(nn.Module):
         z, quant_losses = self.encode(x)
         out = self.decode(z)
         return out, quant_losses
+
+
+class VQVAEInterface(VQVAE):
+    def __init__(self, embed_dim, *args, **kwargs):
+        kwargs.setdefault("z_channels", embed_dim)
+        super().__init__(*args, **kwargs)
+        self.embed_dim = embed_dim
+
+    def encode(self, x):
+        out = self.encoder_conv_in(x)
+        for down in self.encoder_donws:
+            out = down(out)
+        for mid in self.encoder_mids:
+            out = mid(out)
+        out = self.encoder_norm_out(out)
+        out = nn.SiLU()(out)
+        out = self.encoder_conv_out(out)
+        out = self.pre_quant_conv(out)
+        return out
+
+    def decode(self, h, force_not_quantize=False):
+        if not force_not_quantize:
+            quant, _ = self.quantize(h)
+        else:
+            quant = h
+        dec = super().decode(quant)
+        return dec

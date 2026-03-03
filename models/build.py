@@ -100,6 +100,51 @@ def build_model(configs):
             )
         else:
              raise ValueError(f"Unknown diffusion model: {model_type}")
+    
+    elif task == 'stable_diffusion':
+        if model_type in ['ddpm', 'ddim']:
+            from models.Diffusion.nets.unet import UNet
+            
+            reg_type = configs["first_stage"].get("reg_type", "vq")
+            first_stage_cfg = configs["first_stage"]
+            
+            if reg_type == "vq":
+                from models.VAE.nets.vqvae import VQVAEInterface
+                latent_dim = int(first_stage_cfg.get("latent_dim", configs["model"]["in_channels"]))
+                first_stage = VQVAEInterface(
+                    embed_dim=latent_dim,
+                    in_channels=int(first_stage_cfg.get("in_channels", 3)),
+                    z_channels=latent_dim,
+                    codebook_size=int(first_stage_cfg.get("num_embeddings", 8192)),
+                )
+            elif reg_type == "kl":
+                from models.VAE.nets.vae import VAE
+                first_stage = VAE(
+                    in_channels=int(first_stage_cfg.get('in_channels', 3)),
+                    z_channels=int(first_stage_cfg["latent_dim"]),
+                )
+            else:
+                raise ValueError(f"Unknown regularization type for first stage model: {reg_type}")
+            
+            second_stage =  UNet(
+                    dim=int(configs["model"]["dim"]),
+                    dim_mults=configs["model"]["dim_mults"],
+                    attn_layers=configs["model"].get("attn_layers", []),
+                    num_res_blocks=int(configs["model"].get("num_res_blocks", 2)),
+                    dropout=float(configs["model"].get("dropout", 0.0)),
+                    in_channels=int(configs["model"]["in_channels"]),
+                    image_size=int(configs["model"]["img_size"]),
+                    num_classes=configs.get("dataset", {}).get("num_classes", None),
+                    use_biggan_resample=bool(configs["model"].get("use_biggan_resample", False)),
+                )
+            
+            model = {
+                'first_stage': first_stage,
+                'second_stage': second_stage
+            }
+        else:
+             raise ValueError(f"Unknown stable diffusion model: {model_type}")
+    
          
     else:
         raise ValueError(f"Unknown task: {task}")

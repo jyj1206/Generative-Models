@@ -1,0 +1,3 @@
+
+===== Train Session: 2026-03-03 21:58:49 =====
+Logging to: logs/stable_diffusion/ddpm_vqgan_celebA_HQ_03032158/train_output.txt
