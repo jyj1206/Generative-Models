@@ -188,7 +188,7 @@ class UpBlock(nn.Module):
         )
         
         # TODO: test용
-        self.up_sample_conv = nn.ConvTranspose2d(in_channels, out_channels, 4, 2, 1) if self.up_sample else nn.Identity()
+        self.up_sample_conv = nn.ConvTranspose2d(in_channels, in_channels, 4, 2, 1) if self.up_sample else nn.Identity()
         
         # if self.up_sample:
         #     self.up_sample_conv = nn.Sequential(

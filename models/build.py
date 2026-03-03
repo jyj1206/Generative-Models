@@ -259,4 +259,3 @@ def build_diffusion_scheduler(configs, device):
     )
     
     return diffusion, num_timesteps
-

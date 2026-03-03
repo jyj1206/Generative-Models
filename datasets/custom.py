@@ -16,8 +16,8 @@ class CustomDataset(data.Dataset):
     def __init__(self, configs):
         super().__init__()
         self.data_path = configs['dataset']['root']
-        self.img_size = configs['model']['img_size']
-        self.in_channels = configs['model']['in_channels']
+        self.img_size = configs['dataset']['img_size']
+        self.in_channels = configs['dataset']['in_channels']
         self.image_paths = get_image_paths(self.data_path)
         self.transform = get_transforms(self.img_size)
 

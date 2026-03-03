@@ -14,6 +14,8 @@ dataset:
   name: cifar10 # custom / cifar10 / celeba_hq / imagenet
   root: ./data
   num_classes: 10 # 
+  in_channels: 3
+  img_size: 32
 
 train:
   epochs: 800

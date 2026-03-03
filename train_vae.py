@@ -82,7 +82,7 @@ def compute_num_epochs(train_loader, configs):
 
 
 def load_resume_state(model, optimizer, device, resume_path):
-    checkpoint = torch.load(resume_path, map_location=device)
+    checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     start_epoch = int(checkpoint.get("epoch", 0))

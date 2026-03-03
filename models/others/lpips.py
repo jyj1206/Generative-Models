@@ -86,7 +86,7 @@ class LPIPS(nn.Module):
         )
         print(f'Loading model from: {model_path}')
 
-        self.load_state_dict(torch.load(model_path, map_location=device), strict = False)
+        self.load_state_dict(torch.load(model_path, map_location=device, weights_only=True), strict = False)
         
         self.eval()
         for param in self.parameters():

@@ -13,6 +13,8 @@ model:
 dataset:
   name: cifar10
   root: ./data
+  in_channels: 3
+  img_size: 32
 
 train:
   epochs: 800

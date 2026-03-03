@@ -14,6 +14,8 @@ model:
 dataset:
   name: custom
   root: ./data/celeba_hq_256
+  in_channels: 3
+  img_size: 256
 
 first_stage:
   type: vqgan
@@ -24,10 +26,10 @@ first_stage:
   checkpoint_path: ./output/vae/vqvae_vq_celebA_HQ_03030151/checkpoints/vqvae_autoencoder_final.pth
 
 train:
-  epochs: 500              
-  batch_size: 8           
+  epochs: 50              
+  batch_size: 32          
   num_workers: 4
-  learning_rate: 0.00002   
+  learning_rate: 0.00005  
   loss_fn: mse
   optimizer: adam
   ema: true

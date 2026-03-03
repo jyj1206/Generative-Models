@@ -12,7 +12,7 @@ def get_transforms(img_size=128):
     
     
 def get_imagenet_dataset(root, configs, train=True):
-    img_size = configs['model']['img_size']
+    img_size = configs['dataset']['img_size']
     transform = get_transforms(img_size)
     
     dataset = datasets.ImageNet(

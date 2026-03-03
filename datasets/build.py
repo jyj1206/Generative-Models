@@ -6,9 +6,9 @@ def build_dataset(configs):
 
     if name == "cifar10":
         from datasets.cifar10 import get_cifar10_dataset
-        train_dataset = get_cifar10_dataset(root, train=True)
+        train_dataset = get_cifar10_dataset(root, configs, train=True)
         if task == 'vae':
-            test_dataset = get_cifar10_dataset(root, train=False)
+            test_dataset = get_cifar10_dataset(root, configs, train=False)
         else:
             test_dataset = None
 

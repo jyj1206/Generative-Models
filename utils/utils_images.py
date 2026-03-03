@@ -47,6 +47,8 @@ def imread_uint(path, n_channels=3):
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)  # GGG
         else:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # RGB
+    else:
+        raise ValueError(f"Unsupported n_channels={n_channels} for image loading at {path}. Use 1 or 3 for raw image datasets.")
     return img
 
 

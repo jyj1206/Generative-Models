@@ -17,6 +17,8 @@ model:
 dataset:
   name: custom
   root: ./data/celeba_hq_256
+  in_channels: 3
+  img_size: 128
 
 train:
   epochs: 500              

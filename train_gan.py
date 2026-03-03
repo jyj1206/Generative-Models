@@ -74,7 +74,7 @@ def compute_num_epochs(train_loader, configs):
 
 
 def load_resume_state(model, optimizer_g, optimizer_d, device, resume_path):
-    checkpoint = torch.load(resume_path, map_location=device)
+    checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
     model.netG.load_state_dict(checkpoint["generator_state_dict"])
     model.netD.load_state_dict(checkpoint["discriminator_state_dict"])
     optimizer_g.load_state_dict(checkpoint["optimizer_g_state_dict"])

@@ -59,7 +59,7 @@ def _extract_run_suffix(output_dir):
     return os.path.basename(normalized)
 
 
-def setup_train_logger(output_dir, filename="train_output.txt", capture_stderr=False):
+def setup_train_logger(output_dir, filename="train_output.log", capture_stderr=False):
     run_suffix = _extract_run_suffix(output_dir)
     log_dir = os.path.join("logs", run_suffix) if run_suffix else "logs"
     os.makedirs(log_dir, exist_ok=True)

@@ -1,7 +1,4 @@
 import os
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-
 import math
 import copy
 import argparse
@@ -90,7 +87,7 @@ def setup_ema_model(model, configs, device):
 
 
 def load_resume_state(model, optimizer, device, resume_path, ema_model=None, resume_ema_path=None):
-    checkpoint = torch.load(resume_path, map_location=device)
+    checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     start_epoch = int(checkpoint.get("epoch", 0))
@@ -102,7 +99,7 @@ def load_resume_state(model, optimizer, device, resume_path, ema_model=None, res
             if os.path.exists(candidate):
                 resume_ema_path = candidate
         if resume_ema_path and os.path.exists(resume_ema_path):
-            ema_ckpt = torch.load(resume_ema_path, map_location=device)
+            ema_ckpt = torch.load(resume_ema_path, map_location=device, weights_only=True)
             ema_model.load_state_dict(ema_ckpt["model_state_dict"])
         else:
             ema_model.load_state_dict(model.state_dict())
