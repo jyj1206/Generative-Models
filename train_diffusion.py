@@ -16,6 +16,7 @@ from models.build import build_model, build_optimizer, build_diffusion_scheduler
 from utils.util_ema import ema_update
 from utils.util_visualization import generate_and_save_samples, save_diffusion_sampling_gif, save_loss_curve
 from utils.util_save import save_diffusion_checkpoint
+from utils.util_logger import setup_train_logger
 from utils.util_paths import build_output_dir
 
 
@@ -114,6 +115,8 @@ def main():
     configs = yaml_loader(args.config)
 
     output_dir = prepare_output_dir(configs, args.config, args.resume)
+    logger = setup_train_logger(output_dir)
+    print(f"Logging to: {logger.log_path}")
     train_loader = build_dataloader(configs)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -1,6 +1,16 @@
 import torch
 
 
+class HingeAdversarialLoss:
+    def generator_loss(self, logits_fake):
+        return -torch.mean(logits_fake)
+
+    def discriminator_loss(self, logits_real, logits_fake):
+        loss_real = torch.relu(1.0 - logits_real).mean()
+        loss_fake = torch.relu(1.0 + logits_fake).mean()
+        return 0.5 * (loss_real + loss_fake)
+
+
 def build_model(configs):
     task = configs["task"]
     model_type = configs["model"]["type"]
@@ -23,10 +33,11 @@ def build_model(configs):
             model = VanillaVAE(encoder, decoder, int(configs["model"]["latent_dim"]))
         elif model_type == "vqvae":
             reg_type = configs["model"].get("reg_type", "vq")
+            disc_init_weights = bool(configs["model"].get("disc_init_weights", False))
             from models.VAE.nets.vqvae import VQVAE
             from models.VAE.nets.vae import VAE
             from models.others.lpips import LPIPS
-            from models.GAN.nets.discriminator.patch_gan_discriminator import Discriminator
+            from models.GAN.nets.discriminator.patch_gan_discriminator import PatchGANDiscriminator
             
             if reg_type == "vq":
                 autoencoder = VQVAE(
@@ -45,7 +56,10 @@ def build_model(configs):
             model = {
                 'vqvae': autoencoder,
                 'lpips': LPIPS(),
-                'discriminator': Discriminator(in_channels=int(configs["model"]['in_channels']))
+                'discriminator': PatchGANDiscriminator(
+                    in_channels=int(configs["model"]['in_channels']),
+                    init_weights=disc_init_weights,
+                )
             }
         else:
             raise ValueError(f"Unknown VAE model: {model_type}")
@@ -117,7 +131,7 @@ def build_loss_function(configs):
         elif model_type == 'vqvae':
             loss_fn = {
                 'recon_criterion': torch.nn.MSELoss(),
-                'discriminator_criterion': torch.nn.BCEWithLogitsLoss(),
+                'discriminator_criterion': HingeAdversarialLoss(),
             }   
         else:
             raise ValueError(f"Unknown VAE model: {model_type}")

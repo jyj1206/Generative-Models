@@ -12,6 +12,7 @@ from models.build import build_model, build_loss_function, build_optimizer
 from utils.util_makegif import TrainRecorder
 from utils.util_visualization import generate_and_save_samples, save_loss_curve, save_vae_recon_grid
 from utils.util_save import save_vae_checkpoint
+from utils.util_logger import setup_train_logger
 from utils.util_paths import build_output_dir
 
 
@@ -95,6 +96,8 @@ def main():
     configs = yaml_loader(args.config)
 
     output_dir = prepare_output_dir(configs, args.config, args.resume)
+    logger = setup_train_logger(output_dir)
+    print(f"Logging to: {logger.log_path}")
     train_loader, test_loader = build_dataloaders(configs)
     has_test_loader = test_loader is not None
 

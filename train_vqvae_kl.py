@@ -11,6 +11,7 @@ from datasets.build import build_dataset
 from models.build import build_model, build_loss_function, build_optimizer
 from utils.util_visualization import save_loss_curve, save_vae_recon_grid, save_vqvae_latent
 from utils.util_save import save_vqvae_checkpoint
+from utils.util_logger import setup_train_logger
 from utils.util_paths import build_output_dir
 
 
@@ -106,11 +107,23 @@ def load_resume_state(models, optimizers, device, resume_path):
     return start_epoch, iterations
 
 
+def calculate_adaptive_weight(nll_loss, g_loss, disc_weight, last_layer):
+    nll_grads = torch.autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
+    g_grads = torch.autograd.grad(g_loss, last_layer, retain_graph=True)[0]
+
+    d_weight = torch.norm(nll_grads) / (torch.norm(g_grads) + 1e-4)
+    d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
+    d_weight = d_weight * disc_weight
+    return d_weight
+
+
 def main():
     args = parse_args()
     configs = yaml_loader(args.config)
 
     output_dir = prepare_output_dir(configs, args.config, args.resume)
+    logger = setup_train_logger(output_dir)
+    print(f"Logging to: {logger.log_path}")
     train_loader, test_loader = build_dataloaders(configs)
     has_test_loader = test_loader is not None
 
@@ -143,6 +156,8 @@ def main():
         start_epoch, iterations = load_resume_state(models, optimizers, device, args.resume)
 
     kl_beta = float(configs["train"].get("kl_beta", configs["train"].get("beta", 0.1)))
+    perceptual_weight = float(configs["train"].get("perceptual_weight", 1.0))
+    disc_weight = float(configs["train"].get("disc_weight", 0.5))
     disc_step_start = int(configs["train"].get("disc_step_start", 15000))
     step_count = iterations
 
@@ -166,41 +181,44 @@ def main():
             outputs, kl_loss = model_output
 
             recon_loss = recon_criterion(outputs, inputs)
+            lpips_loss = torch.mean(lpips_model(outputs, inputs))
+            nll_loss = recon_loss + perceptual_weight * lpips_loss
             regularization_loss = kl_beta * kl_loss
-            g_loss = recon_loss + regularization_loss
 
-            if step_count > disc_step_start:
+            disc_factor = 1.0 if step_count > disc_step_start else 0.0
+            g_loss = torch.zeros((), device=device)
+            d_weight = torch.tensor(0.0, device=device)
+
+            if disc_factor > 0.0:
                 discriminator.eval()  # freeze BN running stats + disable dropout while computing G's adversarial loss
                 discriminator.requires_grad_(False)   # don't accumulate grads for D params; only backprop to G through outputs
                 disc_fake_pred = discriminator(outputs)
-                disc_fake_loss = discriminator_criterion(disc_fake_pred, torch.ones_like(disc_fake_pred))
-                g_loss += 0.5 * disc_fake_loss
+                g_loss = discriminator_criterion.generator_loss(disc_fake_pred)
+                d_weight = calculate_adaptive_weight(nll_loss, g_loss, disc_weight, last_layer=model.decoder_conv_out.weight)
                 discriminator.requires_grad_(True)
                 discriminator.train()
 
-            lpips_loss = torch.mean(lpips_model(outputs, inputs))
-            g_loss += lpips_loss
-            g_loss.backward()
+            loss = nll_loss + regularization_loss + d_weight * disc_factor * g_loss
+            loss.backward()
             optimizer_g.step()
 
-            if step_count > disc_step_start:
+            if disc_factor > 0.0:
                 optimizer_d.zero_grad()
                 fake = outputs
                 disc_fake_pred = discriminator(fake.detach())
                 disc_real_pred = discriminator(inputs)
-                disc_fake_loss = discriminator_criterion(disc_fake_pred, torch.zeros_like(disc_fake_pred))
-                discriminator_real_loss = discriminator_criterion(disc_real_pred, torch.ones_like(disc_real_pred))
-                d_loss = (disc_fake_loss + discriminator_real_loss) / 2
+                d_raw_loss = discriminator_criterion.discriminator_loss(disc_real_pred, disc_fake_pred)
+                d_loss = disc_factor * d_raw_loss
                 d_loss.backward()
                 optimizer_d.step()
             else:
                 d_loss = torch.zeros((), device=device)
 
-            model_train_loss_sum += g_loss.item()
+            model_train_loss_sum += loss.item()
             discriminator_train_loss_sum += d_loss.item()
             iterations += 1
             pbar.set_postfix({
-                "loss_g": f"{g_loss.item():.4f}",
+                "loss_g": f"{loss.item():.4f}",
                 "loss_d": f"{d_loss.item():.4f}",
                 "iter": iterations,
             })
