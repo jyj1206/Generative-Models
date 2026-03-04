@@ -1,5 +1,6 @@
 # Data and output directories
-data/
+data/*
+!data/.gitkeep
 output/
 
 # Python cache and bytecode

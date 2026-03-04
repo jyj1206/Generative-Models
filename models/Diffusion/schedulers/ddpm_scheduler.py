@@ -67,13 +67,14 @@ class DDPMScheduler(GaussianDiffusion):
         return model_mean, model_log_variance
     
     
-    def p_sample(self, model, x, t, model_kwargs=None, guidance_scale=1.0):
+    def p_sample(self, model, x, t, model_kwargs=None, guidance_scale=1.0, clip_denoised=True):
         """t 시점에서의 샘플링 (p(x_{t-1}|x_t))
 
         Args:
             model: The noise prediction model
             x: Noisy Image at time
             t: timesteps (Batch,)
+            clip_denoised: Whether to clip predicted x0 to [-1, 1]. Set False for latent diffusion.
 
         Returns:
             out: Sampled Image at timestep t-1
@@ -97,13 +98,13 @@ class DDPMScheduler(GaussianDiffusion):
         else:
             pred_noise = model(x, t, **(model_kwargs or {}))   
         
-        model_mean, model_log_variance = self.p_mean_variance(x, t, pred_noise)
+        model_mean, model_log_variance = self.p_mean_variance(x, t, pred_noise, clip_denoised=clip_denoised)
         noise = torch.randn_like(x)
         nonzero_mask = (t > 0).float().view(-1, *((1,) * (len(x.shape) - 1)))  
         return model_mean + torch.exp(0.5 * model_log_variance) * noise * nonzero_mask
     
     
-    def p_sample_loop(self, model, shape, model_kwargs=None, guidance_scale=1.0):
+    def p_sample_loop(self, model, shape, model_kwargs=None, guidance_scale=1.0, clip_denoised=True):
         """전체 샘플링 루프
 
         Args:
@@ -119,6 +120,6 @@ class DDPMScheduler(GaussianDiffusion):
         
         for i in reversed(range(len(self.betas))):
             t = torch.full((batch_size,), i, device=device, dtype=torch.long)
-            img = self.p_sample(model, img, t, model_kwargs=model_kwargs, guidance_scale=guidance_scale)
+            img = self.p_sample(model, img, t, model_kwargs=model_kwargs, guidance_scale=guidance_scale, clip_denoised=clip_denoised)
         
         return img

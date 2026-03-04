@@ -104,6 +104,8 @@ def generate_and_save_samples(model, configs, device, diffusion=None, num_sample
             vae.eval()
             model.eval()
             
+            scale_factor = float(configs.get("first_stage", {}).get("scale_factor", 1.0))
+            
             z_shape = (num_samples, configs["model"]['in_channels'], configs["model"]['img_size'], configs["model"]['img_size'])
             if hasattr(diffusion, "_set_timesteps"):
                 if sampling_steps is None:
@@ -112,12 +114,15 @@ def generate_and_save_samples(model, configs, device, diffusion=None, num_sample
                     model,
                     shape=z_shape,
                     sampling_steps=sampling_steps,
+                    clip_denoised=False,
                 )
             else:
                 latent = diffusion.p_sample_loop(
                     model,
                     shape=z_shape,
-                )           
+                    clip_denoised=False,
+                )
+            latent = latent / scale_factor
             samples = vae.decode(latent)
             samples = samples.detach().cpu()
             default_filename = f"stable_diffusion_generated_samples_epoch_{epoch}.png" if epoch else "stable_diffusion_generated_samples_final.png"
@@ -142,11 +147,14 @@ def generate_and_save_samples(model, configs, device, diffusion=None, num_sample
     return samples
 
 
-def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=False, scale=4):    
+def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=False, scale=4, num_samples=16):    
+    import math
+    from torchvision.utils import make_grid
+    
     with torch.no_grad():
         data_iter = iter(dataloader)
         images, _ = next(data_iter)
-        images = images.to(device)
+        images = images[:num_samples].to(device)
         
         x = images
         model_outputs = model(images)
@@ -155,38 +163,39 @@ def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=Fa
         else:
             x_hat = model_outputs
         
-        # 후처리: [-1, 1] -> [0, 1]
-        x = (x + 1) / 2  # Convert from [-1, 1] to [0, 1]
-        x_hat = (x_hat + 1) / 2  # Convert from [-1, 1] to [0, 1]
-            
-        x = x.clamp(0, 1).cpu()
-        x_hat = x_hat.clamp(0, 1).cpu()
+        # [-1, 1] -> [0, 1]
+        x = ((x + 1) / 2).clamp(0, 1).cpu()
+        x_hat = ((x_hat + 1) / 2).clamp(0, 1).cpu()
+        
+        n = x.size(0)
+        nrow = int(math.ceil(math.sqrt(n)))
+        
+        grid_orig = make_grid(x, nrow=nrow, padding=2)
+        grid_recon = make_grid(x_hat, nrow=nrow, padding=2)
         
         fig_scale = max(1, scale)
-        _, axes = plt.subplots(2, 8, figsize=(12 * fig_scale, 4 * fig_scale))
-        for i in range(8):
-            if images.shape[1] == 3:
-                axes[0, i].imshow(x[i].permute(1, 2, 0))
-                axes[0, i].axis('off')
-                axes[1, i].imshow(x_hat[i].permute(1, 2, 0))
-                axes[1, i].axis('off')
-                axes[0, i].title.set_text("Original")
-                axes[1, i].title.set_text("Reconstruction")
-            else:        
-                axes[0, i].imshow(x[i].permute(1, 2, 0).squeeze(), cmap='gray')
-                axes[0, i].axis('off')
-                axes[1, i].imshow(x_hat[i].permute(1, 2, 0).squeeze(), cmap='gray')
-                axes[1, i].axis('off')
-                axes[0, i].title.set_text("Original")
-                axes[1, i].title.set_text("Reconstruction")
+        fig, axes = plt.subplots(1, 2, figsize=(6 * fig_scale, 3 * fig_scale))
+        
+        axes[0].imshow(grid_orig.permute(1, 2, 0).numpy())
+        axes[0].set_title("Original", fontsize=14 * fig_scale)
+        axes[0].axis('off')
+        
+        axes[1].imshow(grid_recon.permute(1, 2, 0).numpy())
+        axes[1].set_title("Reconstruction", fontsize=14 * fig_scale)
+        axes[1].axis('off')
+        
         plt.tight_layout()
         
         output_dir = get_output_dir(configs)
         
         if epoch is None:
-            plt.savefig(os.path.join(output_dir, "visualization", f"reconstructions_final.png"))
+            save_dir = os.path.join(output_dir, "visualization")
+            os.makedirs(save_dir, exist_ok=True)
+            plt.savefig(os.path.join(save_dir, "reconstructions_final.png"), dpi=150)
         else:
-            plt.savefig(os.path.join(output_dir, "visualization", "train" if train else "test", f"reconstructions_epoch_{epoch}.png"))
+            save_dir = os.path.join(output_dir, "visualization", "train" if train else "test")
+            os.makedirs(save_dir, exist_ok=True)
+            plt.savefig(os.path.join(save_dir, f"reconstructions_epoch_{epoch}.png"), dpi=150)
         
         plt.close()
 
@@ -312,6 +321,7 @@ def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=1
     img_size = configs["model"]["img_size"]
     channels = configs["model"]["in_channels"]
     latent = torch.randn((num_samples, channels, img_size, img_size), device=device)
+    scale_factor = float(configs.get("first_stage", {}).get("scale_factor", 1.0))
 
     print("Stable diffusion sampling process visualization started...")
 
@@ -325,27 +335,27 @@ def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=1
             for i in range(total_steps):
                 t_val = diffusion.timesteps[i]
                 t = torch.full((num_samples,), t_val, device=device, dtype=torch.long)
-                latent = diffusion.p_sample(model, latent, t, i)
+                latent = diffusion.p_sample(model, latent, t, i, clip_denoised=False)
 
                 if i % capture_interval == 0 or i == total_steps - 1:
-                    decoded = vae.decode(latent)
+                    decoded = vae.decode(latent / scale_factor)
                     recorder.record_step(decoded, t=int(t_val.item()))
         else:
             total_steps = len(diffusion.betas)
 
             for i in reversed(range(total_steps)):
                 t = torch.full((num_samples,), i, device=device, dtype=torch.long)
-                latent = diffusion.p_sample(model, latent, t)
+                latent = diffusion.p_sample(model, latent, t, clip_denoised=False)
 
                 if i % capture_interval == 0 or i == 0:
-                    decoded = vae.decode(latent)
+                    decoded = vae.decode(latent / scale_factor)
                     recorder.record_step(decoded, t=i)
 
     recorder.save_gif(duration=duration)
 
     if final_name is not None and save_dir is not None:
         final_path = os.path.join(save_dir, final_name)
-        final_img = vae.decode(latent)
+        final_img = vae.decode(latent / scale_factor)
         save_grid_image(final_img.detach().cpu(), final_path, scale=scale, normalize=None)
 
 

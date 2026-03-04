@@ -1,4 +1,7 @@
 import os
+
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+
 import math
 import copy
 import argparse
@@ -153,6 +156,21 @@ def main():
     vae = load_vae_checkpoint(vae, configs, device)
     vae.eval()
     
+    # Compute latent scaling factor from a batch of data
+    scale_factor = configs.get("first_stage", {}).get("scale_factor", None)
+    if scale_factor is None:
+        print("Computing latent scaling factor...")
+        with torch.no_grad():
+            sample_batch = next(iter(train_loader))[0][:min(64, len(train_loader.dataset))].to(device)
+            sample_latent = vae.encode(sample_batch)
+            print(f"Sample latent shape: {sample_latent.shape}, std: {sample_latent.std().item():.4f}")
+            scale_factor = 1.0 / sample_latent.std().item()
+        print(f"Latent scaling factor: {scale_factor:.4f}")
+    else:
+        scale_factor = float(scale_factor)
+        print(f"Using config latent scaling factor: {scale_factor:.4f}")
+    configs["first_stage"]["scale_factor"] = scale_factor
+    
     optimizer = build_optimizer(model, configs)   
     
     diffusion, num_timesteps = build_diffusion_scheduler(configs, device)
@@ -186,10 +204,10 @@ def main():
             optimizer.zero_grad()
             
             with torch.no_grad():
-                z = vae.encode(inputs)
+                latent = vae.encode(inputs) * scale_factor
             
-            t = torch.randint(0, num_timesteps, (inputs.size(0),), device=device).long()
-            loss = diffusion.p_losses(model, z, t)
+            t = torch.randint(0, num_timesteps, (latent.size(0),), device=device).long()
+            loss = diffusion.p_losses(model, latent, t)
             loss.backward()
             optimizer.step()
 
@@ -204,7 +222,7 @@ def main():
         train_loss_history.append(avg_train_loss)
         print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.4f}")
 
-        if epoch % 2 == 0:
+        if epoch % 25 == 0:
             reference_model = {
                 "first_stage": vae,
                 "second_stage": ema_model if ema_enabled else model,
@@ -230,4 +248,3 @@ if __name__ == "__main__":
     main()    
 
   
-

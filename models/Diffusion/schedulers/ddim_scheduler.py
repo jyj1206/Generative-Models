@@ -69,7 +69,7 @@ class DDIMScheduler(GaussianDiffusion):
         return torch.sqrt(at_prev) * pred_x0 + dir_xt + sigma_t * random_noise   
     
 
-    def p_sample_loop(self, model, shape, model_kwargs=None, guidance_scale=1.0, sampling_steps=50):
+    def p_sample_loop(self, model, shape, model_kwargs=None, guidance_scale=1.0, sampling_steps=50, clip_denoised=True):
         self._set_timesteps(sampling_steps)
         
         device = self.betas.device
@@ -79,5 +79,5 @@ class DDIMScheduler(GaussianDiffusion):
         
         for i in range(sampling_steps):
             t = torch.full((batch_size,), self.timesteps[i], device=device, dtype=torch.long)
-            img = self.p_sample(model, img, t, i, model_kwargs=model_kwargs, guidance_scale=guidance_scale)
+            img = self.p_sample(model, img, t, i, model_kwargs=model_kwargs, guidance_scale=guidance_scale, clip_denoised=clip_denoised)
         return img        

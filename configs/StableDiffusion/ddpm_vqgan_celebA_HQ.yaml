@@ -20,16 +20,15 @@ dataset:
 first_stage:
   type: vqgan
   reg_type: vq
-  checkpoint_path: 
   img_size: 256
   latent_dim: 4
   checkpoint_path: ./output/vae/vqvae_vq_celebA_HQ_03030151/checkpoints/vqvae_autoencoder_final.pth
 
 train:
-  epochs: 50              
-  batch_size: 32          
+  iterations: 300000      # ~300K iterations (DDPM needs long training)
+  batch_size: 64         
   num_workers: 4
-  learning_rate: 0.00005  
+  learning_rate: 0.0002 
   loss_fn: mse
   optimizer: adam
   ema: true
