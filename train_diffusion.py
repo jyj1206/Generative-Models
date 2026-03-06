@@ -124,7 +124,8 @@ def main():
 
     output_dir = prepare_output_dir(configs, args.config, args.resume)
     logger = setup_train_logger(output_dir)
-    print(f"Logging to: {logger.log_path}")
+    if is_main():
+        print(f"Logging to: {logger.log_path}")
     train_loader = build_dataloader(configs)
 
     model = build_model(configs).to(device)
