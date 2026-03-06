@@ -1,5 +1,8 @@
 task: gan
 
+run_time:
+  gpu_ids: [0]
+
 model:
   type: vanila_gan
   img_size: 32

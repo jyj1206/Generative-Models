@@ -1,5 +1,8 @@
 task: diffusion
 
+run_time:
+  gpu_ids: [0]
+  
 model:
   type: ddim
   img_size: 128

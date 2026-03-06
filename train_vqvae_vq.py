@@ -5,6 +5,8 @@ import yaml
 
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
 from datasets.build import build_dataset
@@ -13,6 +15,7 @@ from utils.util_visualization import save_loss_curve, save_vae_recon_grid, save_
 from utils.util_save import save_vqvae_checkpoint
 from utils.util_logger import setup_train_logger
 from utils.util_paths import build_output_dir
+from utils.util_ddp import set_visible_gpus, setup_runtime, cleanup_ddp, is_main
 
 
 def parse_args():
@@ -51,11 +54,15 @@ def build_dataloaders(configs):
 
     train_dataset, test_dataset = build_dataset(configs)
 
+    sampler = None
+    if configs.get('distributed', False):
+        sampler = DistributedSampler(train_dataset)
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(sampler is None),
         num_workers=num_workers,
+        sampler=sampler,
     )
     test_loader = None
     if test_dataset is not None:
@@ -119,6 +126,9 @@ def calculate_adaptive_weight(nll_loss, g_loss, disc_weight, last_layer):
 def main():
     args = parse_args()
     configs = yaml_loader(args.config)
+    set_visible_gpus(configs)
+    distributed, local_rank, device = setup_runtime()
+    configs['distributed'] = distributed
 
     output_dir = prepare_output_dir(configs, args.config, args.resume)
     logger = setup_train_logger(output_dir)
@@ -127,8 +137,6 @@ def main():
     has_test_loader = test_loader is not None
     if has_test_loader:
         os.makedirs(os.path.join(output_dir, "visualization", "test"), exist_ok=True)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     models = build_model(configs)
     criterions = build_loss_function(configs)
@@ -144,6 +152,8 @@ def main():
     iterations = 0
 
     model = models['vqvae'].to(device)
+    if distributed:
+        model = DDP(model, device_ids=[local_rank])
     lpips_model = models['lpips'].eval().to(device)
     discriminator = models['discriminator'].to(device)
 
@@ -170,7 +180,9 @@ def main():
         model_train_loss_sum = 0.0
         discriminator_train_loss_sum = 0.0
 
-        pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{num_epochs}]")
+        if distributed:
+            train_loader.sampler.set_epoch(epoch)
+        pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{num_epochs}]", disable=not is_main())
 
         for inputs, _ in pbar:
             inputs = inputs.to(device)
@@ -222,11 +234,12 @@ def main():
             model_train_loss_sum += loss.item()
             discriminator_train_loss_sum += d_loss.item()
             iterations += 1
-            pbar.set_postfix({
-                "loss_g": f"{loss.item():.4f}",
-                "loss_d": f"{d_loss.item():.4f}",
-                "iter": iterations,
-            })
+            if is_main():
+                pbar.set_postfix({
+                    "loss_g": f"{loss.item():.6f}",
+                    "loss_d": f"{d_loss.item():.6f}",
+                    "iter": iterations,
+                })
 
         avg_train_loss = model_train_loss_sum / len(train_loader)
         avg_disc_train_loss = discriminator_train_loss_sum / len(train_loader)
@@ -252,25 +265,29 @@ def main():
             avg_test_loss = test_loss_sum / len(test_loader)
             test_loss_history.append(avg_test_loss)
 
-        log_message = f"Epoch [{epoch}/{num_epochs}] Done. | G Loss: {avg_train_loss:.4f} | D Loss: {avg_disc_train_loss:.4f}"
+        log_message = f"Epoch [{epoch}/{num_epochs}] Done. | G Loss: {avg_train_loss:.6f} | D Loss: {avg_disc_train_loss:.6f}"
         if avg_test_loss is not None:
-            log_message += f" | Test Loss: {avg_test_loss:.4f}"
-        print(log_message)
+            log_message += f" | Test Loss: {avg_test_loss:.6f}"
+        if is_main():
+            print(log_message)
 
-        if epoch % 5 == 0:
-            save_vae_recon_grid(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
-            save_vqvae_latent(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
-            if has_test_loader:
-                save_vae_recon_grid(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
-                save_vqvae_latent(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
-            save_vqvae_checkpoint(models, optimizers, {"loss_g": avg_train_loss, "loss_d": avg_disc_train_loss}, configs, epoch, iterations)
+            if epoch % 5 == 0:
+                save_vae_recon_grid(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
+                save_vqvae_latent(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
+                if has_test_loader:
+                    save_vae_recon_grid(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
+                    save_vqvae_latent(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
+                save_vqvae_checkpoint(models, optimizers, {"loss_g": avg_train_loss, "loss_d": avg_disc_train_loss}, configs, epoch, iterations)
 
-    model.eval()
-    if has_test_loader:
-        save_vae_recon_grid(model, configs, test_loader, device, scale=args.scale)
-        save_vqvae_latent(model, configs, test_loader, device, train=False, scale=args.scale)
-    save_loss_curve(configs, train_loss_history, disc_loss_history, "Generator Loss", "Discriminator Loss", x_history1=list(range(start_epoch + 1, start_epoch + len(train_loss_history) + 1)), x_history2=disc_loss_epochs)
-    save_vqvae_checkpoint(models, optimizers, {"loss_g": avg_train_loss, "loss_d": avg_disc_train_loss}, configs, num_epochs, iterations, final=True)
+    if is_main():
+        model.eval()
+        if has_test_loader:
+            save_vae_recon_grid(model, configs, test_loader, device, train=False, scale=args.scale)
+            save_vqvae_latent(model, configs, test_loader, device, train=False, scale=args.scale)
+        save_loss_curve(configs, train_loss_history, disc_loss_history, "Generator Loss", "Discriminator Loss", x_history1=list(range(start_epoch + 1, start_epoch + len(train_loss_history) + 1)), x_history2=disc_loss_epochs)
+        save_vqvae_checkpoint(models, optimizers, {"loss_g": avg_train_loss, "loss_d": avg_disc_train_loss}, configs, num_epochs, iterations, final=True)
+
+    cleanup_ddp()
 
 
 if __name__ == "__main__":

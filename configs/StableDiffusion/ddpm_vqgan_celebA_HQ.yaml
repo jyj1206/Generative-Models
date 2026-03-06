@@ -1,5 +1,8 @@
 task: stable_diffusion
 
+run_time:
+  gpu_ids: [0]
+
 model:
   type: ddpm
   img_size: 32        

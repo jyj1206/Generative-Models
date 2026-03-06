@@ -1,7 +1,4 @@
 import os
-
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
-
 import math
 import copy
 import argparse
@@ -9,6 +6,8 @@ import yaml
 
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
 from datasets.build import build_dataset
@@ -18,6 +17,7 @@ from utils.util_visualization import generate_and_save_samples, save_stable_diff
 from utils.util_save import save_diffusion_checkpoint
 from utils.util_logger import setup_train_logger
 from utils.util_paths import build_output_dir
+from utils.util_ddp import set_visible_gpus, setup_runtime, cleanup_ddp, is_main
 
 
 def parse_args():
@@ -55,12 +55,16 @@ def build_dataloader(configs):
     num_workers = configs["train"]["num_workers"]
 
     train_dataset, _ = build_dataset(configs)
+    sampler = None
+    if configs.get('distributed', False):
+        sampler = DistributedSampler(train_dataset)
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(sampler is None),
         num_workers=num_workers,
         pin_memory=True,
+        sampler=sampler,
     )
     return train_loader
 
@@ -140,22 +144,25 @@ def load_vae_checkpoint(vae, configs, device):
 def main():
     args = parse_args()
     configs = yaml_loader(args.config)
+    set_visible_gpus(configs)
+    distributed, local_rank, device = setup_runtime()
+    configs['distributed'] = distributed
 
     output_dir = prepare_output_dir(configs, args.config, args.resume)
     logger = setup_train_logger(output_dir)
     print(f"Logging to: {logger.log_path}")
     train_loader = build_dataloader(configs)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     models = build_model(configs)
-    
     vae = models['first_stage'].to(device)
     model = models['second_stage'].to(device)
-    
+    if distributed:
+        model = DDP(model, device_ids=[local_rank])
+
     # Load VAE
     vae = load_vae_checkpoint(vae, configs, device)
     vae.eval()
-    
+
     # Compute latent scaling factor from a batch of data
     scale_factor = configs.get("first_stage", {}).get("scale_factor", None)
     if scale_factor is None:
@@ -196,16 +203,18 @@ def main():
     for epoch in range(start_epoch + 1, num_epochs + 1):
         model.train()
         train_loss_sum = 0.0
-        pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{num_epochs}]")
+        if distributed:
+            train_loader.sampler.set_epoch(epoch)
+        pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{num_epochs}]", disable=not is_main())
 
         for inputs, _ in pbar:
             inputs = inputs.to(device)
 
             optimizer.zero_grad()
-            
+
             with torch.no_grad():
                 latent = vae.encode(inputs) * scale_factor
-            
+
             t = torch.randint(0, num_timesteps, (latent.size(0),), device=device).long()
             loss = diffusion.p_losses(model, latent, t)
             loss.backward()
@@ -216,35 +225,39 @@ def main():
 
             train_loss_sum += loss.item()
             iterations += 1
-            pbar.set_postfix({"loss": f"{loss.item():.4f}", "iter": iterations})
+            if is_main():
+                pbar.set_postfix({"loss": f"{loss.item():.6f}", "iter": iterations})
 
         avg_train_loss = train_loss_sum / len(train_loader)
         train_loss_history.append(avg_train_loss)
-        print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.4f}")
+        if is_main():
+            print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.6f}")
 
-        if epoch % 25 == 0:
-            reference_model = {
-                "first_stage": vae,
-                "second_stage": ema_model if ema_enabled else model,
-            }
-            reference_model["first_stage"].eval()
-            reference_model["second_stage"].eval()
-            generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, epoch=epoch, scale=args.scale,)
-            save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if ema_enabled else None)
+            if epoch % 25 == 0:
+                reference_model = {
+                    "first_stage": vae,
+                    "second_stage": ema_model if ema_enabled else model,
+                }
+                reference_model["first_stage"].eval()
+                reference_model["second_stage"].eval()
+                generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, epoch=epoch, scale=args.scale,)
+                save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if ema_enabled else None)
 
-    reference_model = {
-        "first_stage": vae,
-        "second_stage": ema_model if ema_enabled else model,
-    }
-    reference_model["first_stage"].eval()
-    reference_model["second_stage"].eval()
-    generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, scale=args.scale)
-    save_stable_diffusion_sampling_gif(reference_model, diffusion, configs, num_samples=16, capture_interval=20, scale=args.scale)
-    save_loss_curve(configs, train_loss_history)
-    save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True, ema_model=ema_model if ema_enabled else None)
+    if is_main():
+        reference_model = {
+            "first_stage": vae,
+            "second_stage": ema_model if ema_enabled else model,
+        }
+        reference_model["first_stage"].eval()
+        reference_model["second_stage"].eval()
+        generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, scale=args.scale)
+        save_stable_diffusion_sampling_gif(reference_model, diffusion, configs, num_samples=16, capture_interval=20, scale=args.scale)
+        save_loss_curve(configs, train_loss_history)
+        save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True, ema_model=ema_model if ema_enabled else None)
 
+    cleanup_ddp()
 
 if __name__ == "__main__":
-    main()    
+    main()
 
-  
+

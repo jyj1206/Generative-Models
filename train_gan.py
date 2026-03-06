@@ -5,6 +5,8 @@ import yaml
 
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
 from datasets.build import build_dataset
@@ -14,6 +16,7 @@ from utils.util_visualization import generate_and_save_samples, save_loss_curve
 from utils.util_save import save_gan_checkpoint
 from utils.util_logger import setup_train_logger
 from utils.util_paths import build_output_dir
+from utils.util_ddp import set_visible_gpus, setup_runtime, cleanup_ddp, is_main
 
 
 def parse_args():
@@ -51,12 +54,16 @@ def build_dataloaders(configs):
     num_workers = configs["train"]["num_workers"]
 
     train_dataset, _ = build_dataset(configs)
+    sampler = None
+    if configs.get('distributed', False):
+        sampler = DistributedSampler(train_dataset)
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(sampler is None),
         num_workers=num_workers,
         pin_memory=True,
+        sampler=sampler,
     )
     return train_loader
 
@@ -87,14 +94,18 @@ def load_resume_state(model, optimizer_g, optimizer_d, device, resume_path):
 def main():
     args = parse_args()
     configs = yaml_loader(args.config)
+    set_visible_gpus(configs)
+    distributed, local_rank, device = setup_runtime()
+    configs['distributed'] = distributed
 
     output_dir = prepare_output_dir(configs, args.config, args.resume)
     logger = setup_train_logger(output_dir)
     print(f"Logging to: {logger.log_path}")
     train_loader = build_dataloaders(configs)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(configs).to(device)
+    if distributed:
+        model = DDP(model, device_ids=[local_rank])
 
     criterion = build_loss_function(configs)
     optimizer_g = build_optimizer(model.netG, configs)
@@ -114,7 +125,9 @@ def main():
         model.train()
         loss_d_sum = 0.0
         loss_g_sum = 0.0
-        pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{num_epochs}]")
+        if distributed:
+            train_loader.sampler.set_epoch(epoch)
+        pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{num_epochs}]", disable=not is_main())
 
         for real_images, _ in pbar:
             real_images = real_images.to(device)
@@ -144,35 +157,40 @@ def main():
             loss_d_sum += loss_d.item()
             loss_g_sum += loss_g.item()
             iterations += 1
-            pbar.set_postfix({
-                "loss_D": f"{loss_d.item():.4f}",
-                "loss_G": f"{loss_g.item():.4f}",
-                "iter": iterations,
-            })
+            if is_main():
+                pbar.set_postfix({
+                    "loss_D": f"{loss_d.item():.6f}",
+                    "loss_G": f"{loss_g.item():.6f}",
+                    "iter": iterations,
+                })
 
         avg_loss_d = loss_d_sum / len(train_loader)
         avg_loss_g = loss_g_sum / len(train_loader)
         loss_d_history.append(avg_loss_d)
         loss_g_history.append(avg_loss_g)
 
-        print(
-            f"Epoch [{epoch}/{num_epochs}] Done. | Loss D: {avg_loss_d:.4f} | "
-            f"Loss G: {avg_loss_g:.4f}"
-        )
+        if is_main():
+            print(
+                f"Epoch [{epoch}/{num_epochs}] Done. | Loss D: {avg_loss_d:.6f} | "
+                f"Loss G: {avg_loss_g:.6f}"
+            )
 
-        model.netG.eval()
-        train_recorder.record_frame(model.netG, epoch)
-        model.netG.train()
+            model.netG.eval()
+            train_recorder.record_frame(model.netG, epoch)
+            model.netG.train()
 
-        if epoch % 25 == 0:
-            generate_and_save_samples(model.netG, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
-            save_gan_checkpoint(model, optimizer_g, optimizer_d, avg_loss_g, avg_loss_d, configs, epoch, iterations)
+            if epoch % 25 == 0:
+                generate_and_save_samples(model.netG, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
+                save_gan_checkpoint(model, optimizer_g, optimizer_d, avg_loss_g, avg_loss_d, configs, epoch, iterations)
 
-    model.eval()
-    generate_and_save_samples(model.netG, configs, device, num_samples=16, scale=args.scale)
-    train_recorder.save_gif(filename="training_process.gif", duration=100)
-    save_loss_curve(configs, loss_g_history, loss_d_history, "Generator Loss", "Discriminator Loss")
-    save_gan_checkpoint(model, optimizer_g, optimizer_d, avg_loss_g, avg_loss_d, configs, num_epochs, iterations, final=True)
+    if is_main():
+        model.eval()
+        generate_and_save_samples(model.netG, configs, device, num_samples=16, scale=args.scale)
+        train_recorder.save_gif(filename="training_process.gif", duration=100)
+        save_loss_curve(configs, loss_g_history, loss_d_history, "Generator Loss", "Discriminator Loss")
+        save_gan_checkpoint(model, optimizer_g, optimizer_d, avg_loss_g, avg_loss_d, configs, num_epochs, iterations, final=True)
+
+    cleanup_ddp()
 
 
 if __name__ == "__main__":

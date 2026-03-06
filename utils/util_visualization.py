@@ -152,9 +152,12 @@ def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=Fa
     from torchvision.utils import make_grid
     
     with torch.no_grad():
-        data_iter = iter(dataloader)
-        images, _ = next(data_iter)
-        images = images[:num_samples].to(device)
+        collected = []
+        for batch_images, _ in dataloader:
+            collected.append(batch_images)
+            if sum(b.size(0) for b in collected) >= num_samples:
+                break
+        images = torch.cat(collected, dim=0)[:num_samples].to(device)
         
         x = images
         model_outputs = model(images)
