@@ -114,9 +114,7 @@ def main():
         os.makedirs(os.path.join(output_dir, "visualization", "test"), exist_ok=True)
 
     model = build_model(configs).to(device)
-    ema_model, ema_decay = None, None
-    if configs['train'].get('ema', False):
-        ema_model, ema_decay = setup_ema_model(model, configs, device)
+    
     if distributed:
         model = DDP(model, device_ids=[local_rank])
     model_to_use = model.module if distributed else model

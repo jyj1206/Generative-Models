@@ -105,9 +105,7 @@ def main():
     train_loader = build_dataloaders(configs)
 
     model = build_model(configs).to(device)
-    ema_model, ema_decay = None, None
-    if configs['train'].get('ema', False):
-        ema_model, ema_decay = setup_ema_model(model, configs, device)
+
     if distributed:
         model = DDP(model, device_ids=[local_rank])
 

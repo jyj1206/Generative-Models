@@ -153,9 +153,7 @@ def main():
     iterations = 0
 
     model = models['vqvae'].to(device)
-    ema_model, ema_decay = None, None
-    if configs['train'].get('ema', False):
-        ema_model, ema_decay = setup_ema_model(model, configs, device)
+    
     if distributed:
         model = DDP(model, device_ids=[local_rank])
     lpips_model = models['lpips'].eval().to(device)
