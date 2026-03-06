@@ -33,6 +33,10 @@ def yaml_loader(configs_path):
         return yaml.safe_load(f)
 
 
+def unwrap_model(model):
+    return model.module if hasattr(model, "module") else model
+
+
 def prepare_output_dir(configs, config_path, resume_path):
     run_name = os.path.splitext(os.path.basename(config_path))[0]
     configs["run_name"] = run_name
@@ -56,8 +60,9 @@ def build_dataloaders(configs):
     train_dataset, test_dataset = build_dataset(configs)
 
     sampler = None
-    if configs.get('distributed', False):
+    if configs.get("distributed", False):
         sampler = DistributedSampler(train_dataset)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -65,6 +70,7 @@ def build_dataloaders(configs):
         num_workers=num_workers,
         sampler=sampler,
     )
+
     test_loader = None
     if test_dataset is not None:
         test_loader = DataLoader(
@@ -73,6 +79,7 @@ def build_dataloaders(configs):
             shuffle=False,
             num_workers=num_workers,
         )
+
     return train_loader, test_loader
 
 
@@ -90,7 +97,7 @@ def compute_num_epochs(train_loader, configs):
 
 def load_resume_state(model, optimizer, device, resume_path):
     checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    unwrap_model(model).load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     start_epoch = int(checkpoint.get("epoch", 0))
     iterations = int(checkpoint.get("iterations", 0))
@@ -100,27 +107,32 @@ def load_resume_state(model, optimizer, device, resume_path):
 def main():
     args = parse_args()
     configs = yaml_loader(args.config)
+
     set_visible_gpus(configs)
     distributed, local_rank, device = setup_runtime()
-    configs['distributed'] = distributed
+    configs["distributed"] = distributed
 
     output_dir = prepare_output_dir(configs, args.config, args.resume)
     logger = setup_train_logger(output_dir)
+
     if is_main():
         print(f"Logging to: {logger.log_path}")
+
     train_loader, test_loader = build_dataloaders(configs)
     has_test_loader = test_loader is not None
+
     if has_test_loader:
         os.makedirs(os.path.join(output_dir, "visualization", "test"), exist_ok=True)
 
     model = build_model(configs).to(device)
-    
+
     if distributed:
         model = DDP(model, device_ids=[local_rank])
-    model_to_use = model.module if distributed else model
+
+    model_to_use = unwrap_model(model)
 
     criterion = build_loss_function(configs)
-    optimizer = build_optimizer(model, configs)
+    optimizer = build_optimizer(model_to_use, configs)
     num_epochs = compute_num_epochs(train_loader, configs)
     train_recorder = TrainRecorder(configs, device, num_samples=16, scale=args.scale)
 
@@ -128,6 +140,7 @@ def main():
     test_loss_history = []
     start_epoch = 0
     iterations = 0
+    avg_train_loss = float("nan")
 
     if args.resume:
         start_epoch, iterations = load_resume_state(model, optimizer, device, args.resume)
@@ -135,9 +148,15 @@ def main():
     for epoch in range(start_epoch + 1, num_epochs + 1):
         model.train()
         train_loss_sum = 0.0
+
         if distributed:
             train_loader.sampler.set_epoch(epoch)
-        pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{num_epochs}]", disable=not is_main())
+
+        pbar = tqdm(
+            train_loader,
+            desc=f"Epoch [{epoch}/{num_epochs}]",
+            disable=not is_main()
+        )
 
         for inputs, _ in pbar:
             inputs = inputs.to(device)
@@ -150,21 +169,29 @@ def main():
 
             train_loss_sum += loss.item()
             iterations += 1
-            if is_main():
-                pbar.set_postfix({"loss": f"{loss.item():.6f}", "iter": iterations})
 
-        avg_train_loss = train_loss_sum / len(train_loader)
+            if is_main():
+                pbar.set_postfix({
+                    "loss": f"{loss.item():.6f}",
+                    "iter": iterations
+                })
+
+        avg_train_loss = torch.tensor(train_loss_sum / len(train_loader), device=device)
+        if distributed:
+            torch.distributed.all_reduce(avg_train_loss, op=torch.distributed.ReduceOp.SUM)
+            avg_train_loss /= torch.distributed.get_world_size()
+        avg_train_loss = avg_train_loss.item()
         train_loss_history.append(avg_train_loss)
 
         avg_test_loss = None
-        if has_test_loader:
-            model.eval()
-
+        if has_test_loader and is_main():
+            model_to_use.eval()
             test_loss_sum = 0.0
+
             with torch.no_grad():
                 for test_inputs, _ in test_loader:
                     test_inputs = test_inputs.to(device)
-                    outputs = model(test_inputs)
+                    outputs = model_to_use(test_inputs)
                     test_loss = criterion(outputs, test_inputs, epoch=epoch)
                     test_loss_sum += test_loss.item()
 
@@ -174,6 +201,7 @@ def main():
         log_message = f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.6f}"
         if avg_test_loss is not None:
             log_message += f" | Test Loss: {avg_test_loss:.6f}"
+
         if is_main():
             print(log_message)
 
@@ -182,31 +210,63 @@ def main():
             model.train()
 
             if epoch % 20 == 0:
-                generate_and_save_samples(model_to_use.decoder, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
-                save_vae_recon_grid(model_to_use, configs, train_loader, device, epoch, train=True, scale=args.scale)
+                generate_and_save_samples(
+                    model_to_use.decoder,
+                    configs,
+                    device,
+                    num_samples=16,
+                    epoch=epoch,
+                    scale=args.scale
+                )
+                save_vae_recon_grid(
+                    model_to_use,
+                    configs,
+                    train_loader,
+                    device,
+                    epoch,
+                    train=True,
+                    scale=args.scale
+                )
                 if has_test_loader:
-                    save_vae_recon_grid(model_to_use, configs, test_loader, device, epoch, train=False, scale=args.scale)
-                save_vae_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations)
+                    save_vae_recon_grid(
+                        model_to_use,
+                        configs,
+                        test_loader,
+                        device,
+                        epoch,
+                        train=False,
+                        scale=args.scale
+                    )
+                save_vae_checkpoint(model_to_use, optimizer, avg_train_loss, configs, epoch, iterations)
 
     if is_main():
         model_to_use.eval()
-        generate_and_save_samples(model_to_use.decoder, configs, device, num_samples=16, scale=args.scale)
+
+        generate_and_save_samples(
+            model_to_use.decoder,
+            configs,
+            device,
+            num_samples=16,
+            scale=args.scale
+        )
         train_recorder.save_gif(filename="training_process.gif", duration=100)
+
         if has_test_loader:
             save_vae_recon_grid(model_to_use, configs, test_loader, device, scale=args.scale)
             save_loss_curve(configs, train_loss_history, test_loss_history)
         else:
             save_loss_curve(configs, train_loss_history)
-        save_vae_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True)
 
-    if is_main():
-        model_to_use = model.module if distributed else model
-        model_to_use.eval()
-        if has_test_loader:
-            with torch.no_grad():
-                for test_inputs, _ in test_loader:
-                    test_inputs = test_inputs.to(device)
-                    outputs = model_to_use(test_inputs)
+        save_vae_checkpoint(
+            model_to_use,
+            optimizer,
+            avg_train_loss,
+            configs,
+            num_epochs,
+            iterations,
+            final=True
+        )
+
     cleanup_ddp()
 
 

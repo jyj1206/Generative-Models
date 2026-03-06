@@ -34,6 +34,10 @@ def yaml_loader(configs_path):
         return yaml.safe_load(f)
 
 
+def unwrap_model(model):
+    return model.module if hasattr(model, "module") else model
+
+
 def prepare_output_dir(configs, config_path, resume_path):
     run_name = os.path.splitext(os.path.basename(config_path))[0]
     configs["run_name"] = run_name
@@ -56,8 +60,9 @@ def build_dataloader(configs):
 
     train_dataset, _ = build_dataset(configs)
     sampler = None
-    if configs.get('distributed', False):
+    if configs.get("distributed", False):
         sampler = DistributedSampler(train_dataset)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -95,8 +100,10 @@ def setup_ema_model(model, configs, device):
 
 def load_resume_state(model, optimizer, device, resume_path, ema_model=None, resume_ema_path=None):
     checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
-    model.load_state_dict(checkpoint["model_state_dict"])
+
+    unwrap_model(model).load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
     start_epoch = int(checkpoint.get("epoch", 0))
     iterations = int(checkpoint.get("iterations", 0))
 
@@ -105,18 +112,19 @@ def load_resume_state(model, optimizer, device, resume_path, ema_model=None, res
             candidate = resume_path.replace(".pth", "_ema.pth")
             if os.path.exists(candidate):
                 resume_ema_path = candidate
+
         if resume_ema_path and os.path.exists(resume_ema_path):
             ema_ckpt = torch.load(resume_ema_path, map_location=device, weights_only=True)
             ema_model.load_state_dict(ema_ckpt["model_state_dict"])
         else:
-            ema_model.load_state_dict(model.state_dict())
+            ema_model.load_state_dict(unwrap_model(model).state_dict())
 
     return start_epoch, iterations
 
 
 def load_vae_checkpoint(vae, configs, device):
     checkpoint_path = configs["first_stage"].get("checkpoint_path", None)
-    
+
     if checkpoint_path is not None and os.path.exists(checkpoint_path):
         print(f"Loading VAE checkpoint from: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
@@ -127,12 +135,12 @@ def load_vae_checkpoint(vae, configs, device):
             elif all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
                 state_dict = checkpoint
             else:
-                raise KeyError("Checkpoint must contain 'vqvae_state_dict")
+                raise KeyError("Checkpoint must contain 'vqvae_state_dict'.")
         else:
             state_dict = checkpoint
 
         vae.load_state_dict(state_dict)
-       
+
         for param in vae.parameters():
             param.requires_grad = False
     else:
@@ -146,18 +154,21 @@ def main():
     configs = yaml_loader(args.config)
     set_visible_gpus(configs)
     distributed, local_rank, device = setup_runtime()
-    configs['distributed'] = distributed
+    configs["distributed"] = distributed
 
     output_dir = prepare_output_dir(configs, args.config, args.resume)
     logger = setup_train_logger(output_dir)
     if is_main():
         print(f"Logging to: {logger.log_path}")
+
     train_loader = build_dataloader(configs)
 
     models = build_model(configs)
-    vae = models['first_stage'].to(device)
-    model = models['second_stage'].to(device)
+    vae = models["first_stage"].to(device)
+    model = models["second_stage"].to(device)
+
     ema_model, ema_decay = setup_ema_model(model, configs, device)
+
     if distributed:
         model = DDP(model, device_ids=[local_rank])
 
@@ -178,6 +189,7 @@ def main():
             print(f"Latent scaling factor: {scale_factor:.4f}")
         else:
             scale_factor = 0.0
+
         if distributed:
             scale_tensor = torch.tensor([scale_factor], dtype=torch.float32, device=device)
             torch.distributed.broadcast(scale_tensor, src=0)
@@ -186,9 +198,10 @@ def main():
         scale_factor = float(scale_factor)
         if is_main():
             print(f"Using config latent scaling factor: {scale_factor:.4f}")
+
     configs["first_stage"]["scale_factor"] = scale_factor
-    
-    optimizer = build_optimizer(model, configs)   
+
+    optimizer = build_optimizer(model, configs)
     diffusion, num_timesteps = build_diffusion_scheduler(configs, device)
     num_epochs = compute_num_epochs(train_loader, configs)
     ema_enabled = ema_model is not None
@@ -196,6 +209,7 @@ def main():
     train_loss_history = []
     start_epoch = 0
     iterations = 0
+    avg_train_loss = None
 
     if args.resume:
         start_epoch, iterations = load_resume_state(
@@ -206,12 +220,14 @@ def main():
             ema_model=ema_model,
             resume_ema_path=args.resume_ema,
         )
-        
+
     for epoch in range(start_epoch + 1, num_epochs + 1):
         model.train()
         train_loss_sum = 0.0
+
         if distributed:
             train_loader.sampler.set_epoch(epoch)
+
         pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{num_epochs}]", disable=not is_main())
 
         for inputs, _ in pbar:
@@ -228,50 +244,106 @@ def main():
             optimizer.step()
 
             if ema_enabled:
-                ema_update(model, ema_model, ema_decay)
+                ema_update(unwrap_model(model), ema_model, ema_decay)
 
             train_loss_sum += loss.item()
             iterations += 1
+
             if is_main():
                 pbar.set_postfix({"loss": f"{loss.item():.6f}", "iter": iterations})
 
         avg_train_loss = train_loss_sum / len(train_loader)
+        avg_train_loss_tensor = torch.tensor(avg_train_loss, device=device)
+
+        if distributed:
+            torch.distributed.all_reduce(avg_train_loss_tensor, op=torch.distributed.ReduceOp.SUM)
+            avg_train_loss_tensor /= torch.distributed.get_world_size()
+
+        avg_train_loss = avg_train_loss_tensor.item()
         train_loss_history.append(avg_train_loss)
+
         if is_main():
             print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.6f}")
 
-            if ema_enabled:
-                second_stage_to_use = ema_model
-            else:
-                second_stage_to_use = model.module if distributed and hasattr(model, 'module') else model
-            reference_model = {
-                "first_stage": vae_to_use,
-                "second_stage": second_stage_to_use,
-            }
-            reference_model["first_stage"].eval()
-            reference_model["second_stage"].eval()
-            generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, epoch=epoch, scale=args.scale,)
-            save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if ema_enabled else None)
+            if epoch % 25 == 0:
+                if ema_enabled:
+                    second_stage_to_use = ema_model
+                else:
+                    second_stage_to_use = unwrap_model(model)
+
+                reference_model = {
+                    "first_stage": vae_to_use,
+                    "second_stage": second_stage_to_use,
+                }
+                reference_model["first_stage"].eval()
+                reference_model["second_stage"].eval()
+
+                generate_and_save_samples(
+                    reference_model,
+                    configs,
+                    device,
+                    diffusion=diffusion,
+                    num_samples=16,
+                    epoch=epoch,
+                    scale=args.scale,
+                )
+
+                save_diffusion_checkpoint(
+                    unwrap_model(model),
+                    optimizer,
+                    avg_train_loss,
+                    configs,
+                    epoch,
+                    iterations,
+                    final=False,
+                    ema_model=ema_model if ema_enabled else None,
+                )
 
     if is_main():
         if ema_enabled:
             second_stage_to_use = ema_model
         else:
-            second_stage_to_use = model.module if distributed and hasattr(model, 'module') else model
+            second_stage_to_use = unwrap_model(model)
+
         reference_model = {
             "first_stage": vae_to_use,
             "second_stage": second_stage_to_use,
         }
         reference_model["first_stage"].eval()
         reference_model["second_stage"].eval()
-        generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, scale=args.scale)
-        save_stable_diffusion_sampling_gif(reference_model, diffusion, configs, num_samples=16, capture_interval=20, scale=args.scale)
+
+        generate_and_save_samples(
+            reference_model,
+            configs,
+            device,
+            diffusion=diffusion,
+            num_samples=16,
+            scale=args.scale,
+        )
+        save_stable_diffusion_sampling_gif(
+            reference_model,
+            diffusion,
+            configs,
+            num_samples=16,
+            capture_interval=20,
+            scale=args.scale,
+        )
         save_loss_curve(configs, train_loss_history)
-        save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True, ema_model=ema_model if ema_enabled else None)
+
+        final_loss = avg_train_loss if avg_train_loss is not None else float("nan")
+        save_diffusion_checkpoint(
+            unwrap_model(model),
+            optimizer,
+            final_loss,
+            configs,
+            num_epochs,
+            iterations,
+            final=True,
+            ema_model=ema_model if ema_enabled else None,
+        )
 
     cleanup_ddp()
 
+
 if __name__ == "__main__":
     main()
-
-
