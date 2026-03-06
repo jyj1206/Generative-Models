@@ -114,8 +114,12 @@ def main():
         os.makedirs(os.path.join(output_dir, "visualization", "test"), exist_ok=True)
 
     model = build_model(configs).to(device)
+    ema_model, ema_decay = None, None
+    if configs['train'].get('ema', False):
+        ema_model, ema_decay = setup_ema_model(model, configs, device)
     if distributed:
         model = DDP(model, device_ids=[local_rank])
+    model_to_use = model.module if distributed else model
 
     criterion = build_loss_function(configs)
     optimizer = build_optimizer(model, configs)
@@ -175,28 +179,36 @@ def main():
         if is_main():
             print(log_message)
 
-            model.decoder.eval()
-            train_recorder.record_frame(model.decoder, epoch)
+            model_to_use.decoder.eval()
+            train_recorder.record_frame(model_to_use.decoder, epoch)
             model.train()
 
             if epoch % 20 == 0:
-                generate_and_save_samples(model.decoder, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
-                save_vae_recon_grid(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
+                generate_and_save_samples(model_to_use.decoder, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
+                save_vae_recon_grid(model_to_use, configs, train_loader, device, epoch, train=True, scale=args.scale)
                 if has_test_loader:
-                    save_vae_recon_grid(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
+                    save_vae_recon_grid(model_to_use, configs, test_loader, device, epoch, train=False, scale=args.scale)
                 save_vae_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations)
 
     if is_main():
-        model.eval()
-        generate_and_save_samples(model.decoder, configs, device, num_samples=16, scale=args.scale)
+        model_to_use.eval()
+        generate_and_save_samples(model_to_use.decoder, configs, device, num_samples=16, scale=args.scale)
         train_recorder.save_gif(filename="training_process.gif", duration=100)
         if has_test_loader:
-            save_vae_recon_grid(model, configs, test_loader, device, scale=args.scale)
+            save_vae_recon_grid(model_to_use, configs, test_loader, device, scale=args.scale)
             save_loss_curve(configs, train_loss_history, test_loss_history)
         else:
             save_loss_curve(configs, train_loss_history)
         save_vae_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True)
 
+    if is_main():
+        model_to_use = model.module if distributed else model
+        model_to_use.eval()
+        if has_test_loader:
+            with torch.no_grad():
+                for test_inputs, _ in test_loader:
+                    test_inputs = test_inputs.to(device)
+                    outputs = model_to_use(test_inputs)
     cleanup_ddp()
 
 

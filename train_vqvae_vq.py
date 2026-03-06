@@ -153,6 +153,9 @@ def main():
     iterations = 0
 
     model = models['vqvae'].to(device)
+    ema_model, ema_decay = None, None
+    if configs['train'].get('ema', False):
+        ema_model, ema_decay = setup_ema_model(model, configs, device)
     if distributed:
         model = DDP(model, device_ids=[local_rank])
     lpips_model = models['lpips'].eval().to(device)
@@ -272,19 +275,21 @@ def main():
         if is_main():
             print(log_message)
 
+            model_to_use = model.module if distributed else model
             if epoch % 5 == 0:
-                save_vae_recon_grid(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
-                save_vqvae_latent(model, configs, train_loader, device, epoch, train=True, scale=args.scale)
+                save_vae_recon_grid(model_to_use, configs, train_loader, device, epoch, train=True, scale=args.scale)
+                save_vqvae_latent(model_to_use, configs, train_loader, device, epoch, train=True, scale=args.scale)
                 if has_test_loader:
-                    save_vae_recon_grid(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
-                    save_vqvae_latent(model, configs, test_loader, device, epoch, train=False, scale=args.scale)
+                    save_vae_recon_grid(model_to_use, configs, test_loader, device, epoch, train=False, scale=args.scale)
+                    save_vqvae_latent(model_to_use, configs, test_loader, device, epoch, train=False, scale=args.scale)
                 save_vqvae_checkpoint(models, optimizers, {"loss_g": avg_train_loss, "loss_d": avg_disc_train_loss}, configs, epoch, iterations)
 
     if is_main():
-        model.eval()
+        model_to_use = model.module if distributed else model
+        model_to_use.eval()
         if has_test_loader:
-            save_vae_recon_grid(model, configs, test_loader, device, train=False, scale=args.scale)
-            save_vqvae_latent(model, configs, test_loader, device, train=False, scale=args.scale)
+            save_vae_recon_grid(model_to_use, configs, test_loader, device, train=False, scale=args.scale)
+            save_vqvae_latent(model_to_use, configs, test_loader, device, train=False, scale=args.scale)
         save_loss_curve(configs, train_loss_history, disc_loss_history, "Generator Loss", "Discriminator Loss", x_history1=list(range(start_epoch + 1, start_epoch + len(train_loss_history) + 1)), x_history2=disc_loss_epochs)
         save_vqvae_checkpoint(models, optimizers, {"loss_g": avg_train_loss, "loss_d": avg_disc_train_loss}, configs, num_epochs, iterations, final=True)
 

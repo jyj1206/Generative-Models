@@ -157,34 +157,40 @@ def main():
     models = build_model(configs)
     vae = models['first_stage'].to(device)
     model = models['second_stage'].to(device)
+    ema_model, ema_decay = setup_ema_model(model, configs, device)
     if distributed:
         model = DDP(model, device_ids=[local_rank])
 
-    # Load VAE
-    vae = load_vae_checkpoint(vae, configs, device)
-    vae.eval()
+    # Load VAE (do NOT wrap in DDP)
+    vae_to_use = load_vae_checkpoint(vae, configs, device)
+    vae_to_use.eval()
 
-    # Compute latent scaling factor from a batch of data
     scale_factor = configs.get("first_stage", {}).get("scale_factor", None)
     if scale_factor is None:
-        print("Computing latent scaling factor...")
-        with torch.no_grad():
-            sample_batch = next(iter(train_loader))[0][:min(64, len(train_loader.dataset))].to(device)
-            sample_latent = vae.encode(sample_batch)
-            print(f"Sample latent shape: {sample_latent.shape}, std: {sample_latent.std().item():.4f}")
-            scale_factor = 1.0 / sample_latent.std().item()
-        print(f"Latent scaling factor: {scale_factor:.4f}")
+        if is_main():
+            print("Computing latent scaling factor...")
+            with torch.no_grad():
+                sample_batch = next(iter(train_loader))[0][:min(64, len(train_loader.dataset))].to(device)
+                sample_latent = vae_to_use.encode(sample_batch)
+                std_val = sample_latent.std().item()
+                print(f"Sample latent shape: {sample_latent.shape}, std: {std_val:.4f}")
+                scale_factor = 1.0 / std_val
+            print(f"Latent scaling factor: {scale_factor:.4f}")
+        else:
+            scale_factor = 0.0
+        if distributed:
+            scale_tensor = torch.tensor([scale_factor], dtype=torch.float32, device=device)
+            torch.distributed.broadcast(scale_tensor, src=0)
+            scale_factor = scale_tensor.item()
     else:
         scale_factor = float(scale_factor)
-        print(f"Using config latent scaling factor: {scale_factor:.4f}")
+        if is_main():
+            print(f"Using config latent scaling factor: {scale_factor:.4f}")
     configs["first_stage"]["scale_factor"] = scale_factor
     
     optimizer = build_optimizer(model, configs)   
-    
     diffusion, num_timesteps = build_diffusion_scheduler(configs, device)
     num_epochs = compute_num_epochs(train_loader, configs)
-    
-    ema_model, ema_decay = setup_ema_model(model, configs, device)
     ema_enabled = ema_model is not None
 
     train_loss_history = []
@@ -214,7 +220,7 @@ def main():
             optimizer.zero_grad()
 
             with torch.no_grad():
-                latent = vae.encode(inputs) * scale_factor
+                latent = vae_to_use.encode(inputs) * scale_factor
 
             t = torch.randint(0, num_timesteps, (latent.size(0),), device=device).long()
             loss = diffusion.p_losses(model, latent, t)
@@ -234,20 +240,27 @@ def main():
         if is_main():
             print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.6f}")
 
-            if epoch % 25 == 0:
-                reference_model = {
-                    "first_stage": vae,
-                    "second_stage": ema_model if ema_enabled else model,
-                }
-                reference_model["first_stage"].eval()
-                reference_model["second_stage"].eval()
-                generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, epoch=epoch, scale=args.scale,)
-                save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if ema_enabled else None)
+            if ema_enabled:
+                second_stage_to_use = ema_model
+            else:
+                second_stage_to_use = model.module if distributed and hasattr(model, 'module') else model
+            reference_model = {
+                "first_stage": vae_to_use,
+                "second_stage": second_stage_to_use,
+            }
+            reference_model["first_stage"].eval()
+            reference_model["second_stage"].eval()
+            generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, epoch=epoch, scale=args.scale,)
+            save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if ema_enabled else None)
 
     if is_main():
+        if ema_enabled:
+            second_stage_to_use = ema_model
+        else:
+            second_stage_to_use = model.module if distributed and hasattr(model, 'module') else model
         reference_model = {
-            "first_stage": vae,
-            "second_stage": ema_model if ema_enabled else model,
+            "first_stage": vae_to_use,
+            "second_stage": second_stage_to_use,
         }
         reference_model["first_stage"].eval()
         reference_model["second_stage"].eval()

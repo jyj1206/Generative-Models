@@ -129,6 +129,7 @@ def main():
     train_loader = build_dataloader(configs)
 
     model = build_model(configs).to(device)
+    ema_model, ema_decay = setup_ema_model(model, configs, device)
     if distributed:
         model = DDP(model, device_ids=[local_rank])
 
@@ -142,7 +143,6 @@ def main():
     if use_cfg and configs.get("dataset", {}).get("num_classes") is None:
         raise ValueError("Classifier-free guidance requires dataset.num_classes in the config.")
 
-    ema_model, ema_decay = setup_ema_model(model, configs, device)
     ema_enabled = ema_model is not None
 
     train_loss_history = []
@@ -197,17 +197,23 @@ def main():
         if is_main():
             print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.6f}")
 
+            if ema_enabled:
+                reference_model_to_use = ema_model
+            else:
+                reference_model_to_use = model.module if distributed else model
             if epoch % 25 == 0:
-                reference_model = ema_model if ema_enabled else model
-                reference_model.eval()
-                generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, epoch=epoch, scale=args.scale, use_cfg=use_cfg)
+                reference_model_to_use.eval()
+                generate_and_save_samples(reference_model_to_use, configs, device, diffusion=diffusion, num_samples=16, epoch=epoch, scale=args.scale, use_cfg=use_cfg)
                 save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, epoch, iterations, final=False, ema_model=ema_model if ema_enabled else None)
 
     if is_main():
-        reference_model = ema_model if ema_enabled else model
-        reference_model.eval()
-        generate_and_save_samples(reference_model, configs, device, diffusion=diffusion, num_samples=16, scale=args.scale, use_cfg=use_cfg)
-        save_diffusion_sampling_gif(reference_model, diffusion, configs, num_samples=16, capture_interval=20, scale=args.scale, use_cfg=use_cfg)
+        if ema_enabled:
+            reference_model_to_use = ema_model
+        else:
+            reference_model_to_use = model.module if distributed else model
+        reference_model_to_use.eval()
+        generate_and_save_samples(reference_model_to_use, configs, device, diffusion=diffusion, num_samples=16, scale=args.scale, use_cfg=use_cfg)
+        save_diffusion_sampling_gif(reference_model_to_use, diffusion, configs, num_samples=16, capture_interval=20, scale=args.scale, use_cfg=use_cfg)
         save_loss_curve(configs, train_loss_history)
         save_diffusion_checkpoint(model, optimizer, avg_train_loss, configs, num_epochs, iterations, final=True, ema_model=ema_model if ema_enabled else None)
 

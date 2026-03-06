@@ -105,6 +105,9 @@ def main():
     train_loader = build_dataloaders(configs)
 
     model = build_model(configs).to(device)
+    ema_model, ema_decay = None, None
+    if configs['train'].get('ema', False):
+        ema_model, ema_decay = setup_ema_model(model, configs, device)
     if distributed:
         model = DDP(model, device_ids=[local_rank])
 
@@ -122,6 +125,8 @@ def main():
     if args.resume:
         start_epoch, iterations = load_resume_state(model, optimizer_g, optimizer_d, device, args.resume)
 
+    netG_to_use = model.module.netG if distributed else model.netG
+    netD_to_use = model.module.netD if distributed else model.netD
     for epoch in range(start_epoch + 1, num_epochs + 1):
         model.train()
         loss_d_sum = 0.0
@@ -135,13 +140,13 @@ def main():
             batch_size = real_images.size(0)
 
             optimizer_d.zero_grad()
-            z = torch.randn(batch_size, model.netG.latent_dim, device=device)
-            fake_images = model.netG(z)
+            z = torch.randn(batch_size, netG_to_use.latent_dim, device=device)
+            fake_images = netG_to_use(z)
             label_real = torch.ones(batch_size, device=device) * 0.9
             label_fake = torch.zeros(batch_size, device=device)
 
-            output_real = model.netD(real_images)
-            output_fake = model.netD(fake_images.detach())
+            output_real = netD_to_use(real_images)
+            output_fake = netD_to_use(fake_images.detach())
 
             loss_d_real = criterion(output_real, label_real)
             loss_d_fake = criterion(output_fake, label_fake)
@@ -150,7 +155,7 @@ def main():
             optimizer_d.step()
 
             optimizer_g.zero_grad()
-            output = model.netD(fake_images)
+            output = netD_to_use(fake_images)
             loss_g = criterion(output, label_real)
             loss_g.backward()
             optimizer_g.step()
@@ -176,21 +181,25 @@ def main():
                 f"Loss G: {avg_loss_g:.6f}"
             )
 
-            model.netG.eval()
-            train_recorder.record_frame(model.netG, epoch)
-            model.netG.train()
+            netG_to_use.eval()
+            train_recorder.record_frame(netG_to_use, epoch)
+            netG_to_use.train()
 
             if epoch % 25 == 0:
-                generate_and_save_samples(model.netG, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
+                generate_and_save_samples(netG_to_use, configs, device, num_samples=16, epoch=epoch, scale=args.scale)
                 save_gan_checkpoint(model, optimizer_g, optimizer_d, avg_loss_g, avg_loss_d, configs, epoch, iterations)
 
     if is_main():
-        model.eval()
-        generate_and_save_samples(model.netG, configs, device, num_samples=16, scale=args.scale)
+        netG_to_use.eval()
+        netD_to_use.eval()
+        generate_and_save_samples(netG_to_use, configs, device, num_samples=16, scale=args.scale)
         train_recorder.save_gif(filename="training_process.gif", duration=100)
         save_loss_curve(configs, loss_g_history, loss_d_history, "Generator Loss", "Discriminator Loss")
         save_gan_checkpoint(model, optimizer_g, optimizer_d, avg_loss_g, avg_loss_d, configs, num_epochs, iterations, final=True)
 
+    if is_main():
+        netG_to_use.eval()
+        netD_to_use.eval()
     cleanup_ddp()
 
 
