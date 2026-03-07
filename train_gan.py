@@ -125,7 +125,11 @@ def main():
 
     if distributed:
         netG = DDP(netG, device_ids=[local_rank])
-        netD = DDP(netD, device_ids=[local_rank])
+        netD = DDP(
+            netD,
+            device_ids=[local_rank],
+            broadcast_buffers=False,
+        )
 
     raw_netG = unwrap_model(netG)
     raw_netD = unwrap_model(netD)
@@ -151,6 +155,24 @@ def main():
         start_epoch, iterations, avg_loss_g, avg_loss_d = load_resume_state(
             raw_netG, raw_netD, optimizer_g, optimizer_d, device, args.resume
         )
+
+    if target_iterations > 0 and iterations >= target_iterations:
+        if is_main():
+            print(
+                f"Resume checkpoint already reached target iterations: "
+                f"iterations={iterations}, target_iterations={target_iterations}"
+            )
+        cleanup_ddp()
+        return
+
+    if target_iterations == 0 and start_epoch >= num_epochs:
+        if is_main():
+            print(
+                f"Resume checkpoint already reached target epochs: "
+                f"start_epoch={start_epoch}, num_epochs={num_epochs}"
+            )
+        cleanup_ddp()
+        return
 
     for epoch in range(start_epoch + 1, num_epochs + 1):
         netG.train()
@@ -203,11 +225,11 @@ def main():
             # --------------------
             for p in raw_netD.parameters():
                 p.requires_grad = False
-            netD.eval()
+            raw_netD.eval()
 
             optimizer_g.zero_grad(set_to_none=True)
 
-            output_gen = netD(fake_images)
+            output_gen = raw_netD(fake_images)
             label_gen = torch.full_like(output_gen, 0.9)
             loss_g = criterion(output_gen, label_gen)
 

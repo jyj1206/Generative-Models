@@ -1,7 +1,7 @@
 task: vae
 
 run_time:
-  gpu_ids: [0]
+  gpu_ids: [1]
   
 model:
   type: vqvae
@@ -21,12 +21,12 @@ train:
   epochs: 80
   batch_size: 8 
   num_workers: 4
-  learning_rate: 0.00005
+  learning_rate: 4.5e-06
   weight_decay: 0.0
   optimizer: adam
   beta1: 0.5
   beta2: 0.999
-  kl_beta: 0.1
+  kl_beta: 1.0e-06
   perceptual_weight: 1.0
-  disc_weight: 0.5
+  disc_weight: 0.25
   disc_step_start: 15000

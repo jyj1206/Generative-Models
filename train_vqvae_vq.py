@@ -67,6 +67,7 @@ def build_dataloaders(configs):
         shuffle=(sampler is None),
         num_workers=num_workers,
         sampler=sampler,
+        pin_memory=True,
     )
 
     test_loader = None
@@ -76,6 +77,7 @@ def build_dataloaders(configs):
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
+            pin_memory=True,
         )
 
     return train_loader, test_loader
@@ -162,7 +164,11 @@ def main():
 
     if distributed:
         model = DDP(model, device_ids=[local_rank])
-        discriminator = DDP(discriminator, device_ids=[local_rank])
+        discriminator = DDP(
+            discriminator,
+            device_ids=[local_rank],
+            broadcast_buffers=False,
+        )
 
     model_to_use = unwrap_model(model)
     disc_to_use = unwrap_model(discriminator)

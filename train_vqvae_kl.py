@@ -244,8 +244,9 @@ def main():
             if disc_factor > 0.0:
                 optimizer_d.zero_grad()
 
-                disc_fake_pred = discriminator(outputs.detach())
-                disc_real_pred = discriminator(inputs)
+                disc_inputs = torch.cat([inputs, outputs.detach()], dim=0)
+                disc_preds = discriminator(disc_inputs)
+                disc_real_pred, disc_fake_pred = torch.chunk(disc_preds, 2, dim=0)
                 d_raw_loss = discriminator_criterion.discriminator_loss(disc_real_pred, disc_fake_pred)
                 d_loss = disc_factor * d_raw_loss
 
