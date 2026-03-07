@@ -30,6 +30,7 @@ dataset:
   root: ./data
   in_channels: 3
   img_size: 32
+  num_classes: 10
 
 train:
   epochs: 800

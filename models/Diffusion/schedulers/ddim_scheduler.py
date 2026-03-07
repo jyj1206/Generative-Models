@@ -47,7 +47,8 @@ class DDIMScheduler(GaussianDiffusion):
             out_cond, out_uncond = model_out.chunk(2, dim=0)
             pred_noise = out_uncond + guidance_scale * (out_cond - out_uncond)
         else:
-            pred_noise = model(x, t, **(model_kwargs or {}))
+            forward_kwargs = {k: v for k, v in (model_kwargs or {}).items() if k != 'uncond_context'}
+            pred_noise = model(x, t, **forward_kwargs)
         
         at_t = self.alpha_cumprod_at_t[t_idx]
         at_prev = self.alpha_cumprod_at_prev[t_idx]

@@ -32,6 +32,8 @@ def parse_args():
     parser.add_argument('--gif_duration', type=int, default=50)
     parser.add_argument('--gif_name', type=str, default='sampling_process.gif')
     parser.add_argument('--gif_final_name', type=str, default='sampling_final.png')
+    parser.add_argument('--condition_text', type=str, default=None, help='Text for conditional generation (latent_diffusion only)')
+    parser.add_argument('--uncondition_text', type=str, default=None, help='Text for unconditional generation (latent_diffusion only)')
     args = parser.parse_args()
     return args
 
@@ -96,7 +98,6 @@ def main():
 
     # --- Load checkpoints based on task ---
     if task == "vae" and configs["model"]["type"] == "vqvae":
-        # VQVAE: build_model returns dict {'vqvae': ..., 'lpips': ..., 'discriminator': ...}
         vqvae = model['vqvae'].to(device)
         load_vae_checkpoint(vqvae, args.model_path, device)
         vqvae.eval()
@@ -105,6 +106,7 @@ def main():
     elif task == "latent_diffusion":
         vae = model['autoencoder'].to(device)
         unet = model['denoiser'].to(device)
+        text_encoder = model.get('text_encoder', None)
 
         # Load VAE checkpoint from config
         vae_path = configs["model"].get("autoencoder", {}).get("checkpoint_path")
@@ -116,6 +118,10 @@ def main():
         unet.eval()
 
         generator = {'autoencoder': vae, 'denoiser': unet}
+        if text_encoder is not None:
+            text_encoder = text_encoder.to(device)
+            text_encoder.eval()
+            generator['text_encoder'] = text_encoder
     else:
         load_checkpoint(model, args.model_path, device)
         model.to(device)
@@ -182,6 +188,32 @@ def main():
         save_filename = append_timestamp(f"single_sample{out_ext}", timestamp)
         save_path = os.path.join(inference_dir, save_filename)
 
+    # latent_diffusion text condition
+    model_kwargs = None
+    if task == "latent_diffusion":
+        cond_type = configs.get("conditioning", {}).get("type", None)
+        if cond_type != "text":
+            if args.condition_text or args.uncondition_text:
+                raise ValueError("condition_text/uncondition_text provided, but model is not a text-conditioned latent_diffusion model.")
+        text_encoder = generator.get('text_encoder', None)
+        if args.condition_text is not None:
+            if text_encoder is None:
+                raise ValueError("Text encoder not found in model for latent_diffusion.")
+            batch_size = num_to_sample
+            with torch.no_grad():
+                # CLIP/BERT 등에서 encode_text는 batch 입력을 받음
+                context = text_encoder.encode_text([args.condition_text]*batch_size, device=device)
+                # context shape: (batch, dim) or (batch, seq_len, dim)
+                if args.uncondition_text is not None:
+                    uncond_context = text_encoder.encode_text([args.uncondition_text]*batch_size, device=device)
+                else:
+                    null_text = configs.get("conditioning", {}).get("text", {}).get("null_text", "")
+                    uncond_context = text_encoder.encode_text([null_text]*batch_size, device=device)
+                # shape, dtype, device 맞춤
+                context = context.to(device)
+                uncond_context = uncond_context.to(device)
+            model_kwargs = {"context": context, "uncond_context": uncond_context}
+
     generate_and_save_samples(
         generator,
         configs,
@@ -196,6 +228,7 @@ def main():
         save_dir=inference_dir,
         filename=save_filename,
         scale=args.scale,
+        model_kwargs=model_kwargs,
     )
 
     elapsed = time.perf_counter() - start_time
@@ -240,6 +273,8 @@ def main():
             final_name=final_name,
             duration=args.gif_duration,
             sampling_steps=args.sampling_steps,
+            model_kwargs=model_kwargs,
+            guidance_scale=args.guidance_scale,
         )
 
 

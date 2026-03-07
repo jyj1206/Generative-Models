@@ -4,6 +4,7 @@ run_time:
   gpu_ids: [0]
 
 model:
+  type: ddpm
   autoencoder:
     type: vqgan
     reg_type: vq
@@ -31,8 +32,8 @@ conditioning:
     null_text: ""
   cfg:
     enabled: True
-    p_uncond: 0.0
-    guidance_scale: 1.0
+    p_uncond: 0.1
+    guidance_scale: 3.0
 
 dataset:
   name: custom
@@ -41,13 +42,15 @@ dataset:
   img_size: 256
 
   text:
-    root: ./data/CelebA-HQ-captions
+    root: ./data/celeba_caption
 
 train:
   iterations: 300000
   batch_size: 64
   num_workers: 4
+  optimizer: adam
   learning_rate: 0.0002
+  ema: true
   ema_decay: 0.9999
 
 diffusion:

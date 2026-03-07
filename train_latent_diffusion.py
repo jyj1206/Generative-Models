@@ -182,7 +182,9 @@ def main():
     models = build_model(configs)
     vae = models["autoencoder"].to(device)
     model = models["denoiser"].to(device)
-    text_encoder = models["text_encoder"].to(device) if "text_encoder" in models else None
+    text_encoder = models.get("text_encoder", None)
+    if text_encoder is not None:
+        text_encoder = text_encoder.to(device)
 
     use_text = (
         configs.get("task") == "latent_diffusion"
@@ -222,6 +224,8 @@ def main():
             with torch.no_grad():
                 sample_batch = next(iter(train_loader))[0][:min(64, len(train_loader.dataset))].to(device)
                 sample_latent = vae_to_use.encode(sample_batch)
+                if isinstance(sample_latent, (tuple, list)):
+                    sample_latent = sample_latent[0]
                 std_val = sample_latent.std().item()
                 print(f"Sample latent shape: {sample_latent.shape}, std: {std_val:.4f}")
                 scale_factor = 1.0 / std_val
@@ -276,17 +280,22 @@ def main():
             optimizer.zero_grad()
 
             with torch.no_grad():
-                latent = vae_to_use.encode(inputs) * scale_factor
+                latent = vae_to_use.encode(inputs)
+                if isinstance(latent, (tuple, list)):
+                    latent = latent[0]
+                latent = latent * scale_factor
 
             model_kwargs = None
 
             if use_text:
-                if isinstance(cond, tuple):
+                if isinstance(cond, (tuple, list)):
                     cond = list(cond)
                 elif isinstance(cond, str):
                     cond = [cond]
-                elif not isinstance(cond, list):
-                    raise ValueError("Text conditioning is enabled, but dataset did not return text captions correctly.")
+                elif cond is None:
+                    raise ValueError("Text conditioning is enabled, but dataset did not return text captions.")
+                else:
+                    cond = [str(c) for c in cond]
 
                 with torch.no_grad():
                     context = text_encoder.encode_text(cond, device=device)
@@ -301,7 +310,6 @@ def main():
 
                 model_kwargs = {
                     "context": context,
-                    "uncond_context": uncond_context,
                 }
 
             t = torch.randint(0, num_timesteps, (latent.size(0),), device=device).long()
@@ -345,9 +353,14 @@ def main():
                     "denoiser": denoiser_to_use,
                 }
 
+                mid_model_kwargs = None
                 if use_text:
                     reference_model["text_encoder"] = text_encoder
                     reference_model["text_encoder"].eval()
+                    with torch.no_grad():
+                        mid_context = text_encoder.encode_text([null_text] * 16, device=device)
+                        mid_uncond = base_uncond_context.expand(16, -1, -1).contiguous()
+                    mid_model_kwargs = {"context": mid_context, "uncond_context": mid_uncond}
 
                 reference_model["autoencoder"].eval()
                 reference_model["denoiser"].eval()
@@ -360,6 +373,7 @@ def main():
                     num_samples=16,
                     epoch=epoch,
                     scale=args.scale,
+                    model_kwargs=mid_model_kwargs,
                 )
 
                 save_diffusion_checkpoint(
@@ -381,9 +395,14 @@ def main():
             "denoiser": denoiser_to_use,
         }
 
+        sample_model_kwargs = None
         if use_text:
             reference_model["text_encoder"] = text_encoder
             reference_model["text_encoder"].eval()
+            with torch.no_grad():
+                sample_context = text_encoder.encode_text([null_text] * 16, device=device)
+                sample_uncond = base_uncond_context.expand(16, -1, -1).contiguous()
+            sample_model_kwargs = {"context": sample_context, "uncond_context": sample_uncond}
 
         reference_model["autoencoder"].eval()
         reference_model["denoiser"].eval()
@@ -395,6 +414,7 @@ def main():
             diffusion=diffusion,
             num_samples=16,
             scale=args.scale,
+            model_kwargs=sample_model_kwargs,
         )
         save_stable_diffusion_sampling_gif(
             reference_model,
@@ -403,6 +423,7 @@ def main():
             num_samples=16,
             capture_interval=20,
             scale=args.scale,
+            model_kwargs=sample_model_kwargs,
         )
         save_loss_curve(configs, train_loss_history)
 

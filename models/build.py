@@ -13,7 +13,7 @@ class HingeAdversarialLoss:
 
 def build_model(configs):
     task = configs["task"]
-    model_type = configs["model"]["type"]
+    model_type = configs["model"].get("type", configs["model"].get("denoiser", {}).get("type", None))
 
     if task == 'vae':
         if model_type == "vanila_vae":
@@ -131,9 +131,41 @@ def build_model(configs):
             else:
                 raise ValueError(f"Unknown regularization type for autoencoder model: {reg_type}")
 
+            # Conditioning config — build text encoder first so we can get context_dim
+            conditioning_cfg = configs.get("conditioning", {})
+            condition_type = conditioning_cfg.get("type", None)
+            text_encoder = None
+            context_dim = None
+
+            if condition_type == 'text':
+                text_cfg = conditioning_cfg.get("text", {})
+                if text_cfg:
+                    encoder_type = text_cfg.get("encoder_type", text_cfg.get("encoder", "bert"))
+                    if encoder_type == "bert":
+                        from models.others.text_encoders import BERTTextEncoderWrapper
+                        pretrained_name = text_cfg.get("pretrained_name", text_cfg.get("pretrained_model_name", "bert-base-uncased"))
+                        max_length = int(text_cfg.get("max_length", 77))
+                        text_encoder = BERTTextEncoderWrapper(
+                            model_name=pretrained_name,
+                            freeze=bool(text_cfg.get("freeze", True)),
+                            max_length=max_length,
+                        )
+                    elif encoder_type == "clip":
+                        from models.others.text_encoders import CLIPTextEncoderWrapper
+                        pretrained_name = text_cfg.get("pretrained_name", text_cfg.get("pretrained_model_name", "openai/clip-vit-base-patch32"))
+                        text_encoder = CLIPTextEncoderWrapper(
+                            model_name=pretrained_name,
+                            freeze=bool(text_cfg.get("freeze", True)),
+                        )
+                    else:
+                        raise ValueError(f"Unknown text encoder type: {encoder_type}")
+                    context_dim = text_encoder.context_dim
+                else:
+                    raise ValueError("Text conditioning is enabled but no text config provided.")
+
             # Denoiser UNet
             denoiser_cfg = configs["model"]["denoiser"]
-            denoiser =  UNet(
+            denoiser = UNet(
                     dim=int(denoiser_cfg["dim"]),
                     dim_mults=denoiser_cfg["dim_mults"],
                     attn_layers=denoiser_cfg.get("attn_layers", []),
@@ -143,33 +175,8 @@ def build_model(configs):
                     image_size=int(denoiser_cfg["img_size"]),
                     num_classes=configs.get("dataset", {}).get("num_classes", None),
                     use_biggan_resample=bool(denoiser_cfg.get("use_biggan_resample", False)),
+                    context_dim=context_dim,
                 )
-            
-            # Condictioning config
-            conditioning_cfg = configs.get("conditioning", {})
-            condition_type = conditioning_cfg.get("type", None)
-            if condition_type == 'text':
-                text_cfg = conditioning_cfg.get("text", {})
-                if text_cfg:
-                    encoder_type = text_cfg.get("encoder", "bert")
-                    if encoder_type == "bert":
-                        from models.others.text_encoders import BERTTextEncoderWrapper
-                        text_encoder = BERTTextEncoderWrapper(
-                            model_name=text_cfg.get("pretrained_model_name", "bert-base-uncased"),
-                            freeze=bool(text_cfg.get("freeze", True)),
-                        )
-                    elif encoder_type == "clip":
-                        from models.others.text_encoders import CLIPTextEncoderWrapper
-                        text_encoder = CLIPTextEncoderWrapper(
-                            model_name=text_cfg.get("pretrained_model_name", "openai/clip-vit-base-patch32"),
-                            freeze=bool(text_cfg.get("freeze", True)),
-                        )
-                    else:
-                            raise ValueError(f"Unknown text encoder type: {encoder_type}")
-                else:
-                    raise ValueError("Text conditioning is enabled but no text config provided.")                
-            else:
-                text_encoder = None    
 
             model = {
                 'autoencoder': autoencoder,
@@ -189,7 +196,7 @@ def build_model(configs):
 def build_loss_function(configs):
     task = configs["task"]
     loss_type = configs["train"].get('loss_fn', None)
-    model_type = configs["model"]["type"]
+    model_type = configs["model"].get("type", configs["model"].get("denoiser", {}).get("type", None))
     
     if task == 'vae':
         if model_type == 'vanila_vae':
@@ -219,8 +226,8 @@ def build_loss_function(configs):
     elif task == 'gan':    
         if model_type == 'vanila_gan':
             if loss_type == 'bce':
-                from models.GAN.gan_loss import vanila_gan_loss_bce
-                loss_fn = vanila_gan_loss_bce()
+                from models.GAN.gan_loss import vanila_gan_loss
+                loss_fn = vanila_gan_loss()
             else:
                 raise ValueError(f"Unknown loss function: {loss_type}")
         else:
@@ -240,7 +247,7 @@ def build_loss_function(configs):
 
 
 def build_optimizer(model, configs):
-    model_type = configs["model"]["type"]
+    model_type = configs["model"].get("type", configs["model"].get("denoiser", {}).get("type", None))
     optim_type = configs["train"]['optimizer']
     learning_rate = float(configs["train"]['learning_rate'])
     weight_decay = float(configs["train"].get("weight_decay", 0))

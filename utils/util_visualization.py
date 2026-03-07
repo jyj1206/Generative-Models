@@ -46,7 +46,7 @@ def save_loss_curve(configs, loss_history1, loss_history2=None,
     plt.close() 
 
 
-def generate_and_save_samples(model, configs, device, diffusion=None, num_samples=16, epoch=None, scale=4, use_cfg=False, class_id=None, guidance_scale=None, sampling_steps=None, save_dir=None, filename=None, save_to_file=True):
+def generate_and_save_samples(model, configs, device, diffusion=None, num_samples=16, epoch=None, scale=4, use_cfg=False, class_id=None, guidance_scale=None, sampling_steps=None, save_dir=None, filename=None, save_to_file=True, model_kwargs=None):
     task = configs.get("task")
     
     with torch.no_grad():
@@ -54,27 +54,33 @@ def generate_and_save_samples(model, configs, device, diffusion=None, num_sample
             z = torch.randn(num_samples, model.latent_dim).to(device)
             samples = model(z).detach().cpu()
             default_filename = f"generated_samples_epoch_{epoch}.png" if epoch else "generated_samples_final.png"
-            
+
         elif task == "gan":
             z = torch.randn(num_samples, model.latent_dim).to(device)
             samples = model(z).detach().cpu()
             default_filename = f"generated_samples_epoch_{epoch}.png" if epoch else "generated_samples_final.png"
-            
+
         elif task == "diffusion":
             if diffusion is None:
                 raise ValueError("Diffusion scheduler is required for diffusion task.")
-            
-            model_kwargs = None
+
+            _model_kwargs = None
             if guidance_scale is None:
                 guidance_scale = float(configs.get("diffusion", {}).get("guidance_scale", 1.0))
-                
+
             if use_cfg:
                 if class_id is None:
                     num_classes = int(configs.get("dataset", {}).get("num_classes", 1000))
                     class_id = int(torch.randint(0, num_classes, (1,), device=device).item())
-                model_kwargs = {"y": torch.full((num_samples,), class_id, device=device, dtype=torch.long)}
-            
-            sample_shape = (num_samples, configs["model"]['in_channels'], configs["model"]['img_size'], configs["model"]['img_size'])
+                _model_kwargs = {"y": torch.full((num_samples,), class_id, device=device, dtype=torch.long)}
+            if model_kwargs is not None:
+                if _model_kwargs is not None:
+                    _model_kwargs.update(model_kwargs)
+                else:
+                    _model_kwargs = model_kwargs
+
+            denoiser_cfg = configs["model"]["denoiser"]
+            sample_shape = (num_samples, int(denoiser_cfg['in_channels']), int(denoiser_cfg['img_size']), int(denoiser_cfg['img_size']))
             if hasattr(diffusion, "_set_timesteps"):
                 if sampling_steps is None:
                     sampling_steps = int(configs.get("diffusion", {}).get("sampling_steps", 50))
@@ -82,28 +88,43 @@ def generate_and_save_samples(model, configs, device, diffusion=None, num_sample
                     model,
                     shape=sample_shape,
                     sampling_steps=sampling_steps,
-                    model_kwargs=model_kwargs,
+                    model_kwargs=_model_kwargs,
                     guidance_scale=guidance_scale
                 )
             else:
                 samples = diffusion.p_sample_loop(
                     model,
                     shape=sample_shape,
-                    model_kwargs=model_kwargs,
+                    model_kwargs=_model_kwargs,
                     guidance_scale=guidance_scale
                 )
             samples = samples.detach().cpu()
             default_filename = f"diffusion_generated_samples_epoch_{epoch}.png" if epoch else "diffusion_generated_samples_final.png"
-        
+
         elif task == "latent_diffusion":
             if diffusion is None:
                 raise ValueError("Diffusion scheduler is required for latent_diffusion task.")
             vae = model['autoencoder']
             unet = model['denoiser']
+            text_encoder = model.get('text_encoder', None)
             vae.eval()
             unet.eval()
             scale_factor = float(configs["model"].get("autoencoder", {}).get("scale_factor", 1.0))
-            z_shape = (num_samples, configs["model"]['in_channels'], configs["model"]['img_size'], configs["model"]['img_size'])
+            denoiser_cfg = configs["model"]["denoiser"]
+            z_channels = int(denoiser_cfg["in_channels"])
+            z_size = int(denoiser_cfg["img_size"])
+            z_shape = (num_samples, z_channels, z_size, z_size)
+
+            _model_kwargs = model_kwargs
+            if _model_kwargs is None and text_encoder is not None:
+                null_text = configs.get("conditioning", {}).get("text", {}).get("null_text", "")
+                with torch.no_grad():
+                    uncond_context = text_encoder.encode_text([null_text] * num_samples, device=device)
+                _model_kwargs = {"context": uncond_context, "uncond_context": uncond_context}
+
+            if guidance_scale is None:
+                guidance_scale = float(configs.get("conditioning", {}).get("cfg", {}).get("guidance_scale", 1.0))
+
             if hasattr(diffusion, "_set_timesteps"):
                 if sampling_steps is None:
                     sampling_steps = int(configs.get("diffusion", {}).get("sampling_steps", 50))
@@ -112,12 +133,16 @@ def generate_and_save_samples(model, configs, device, diffusion=None, num_sample
                     shape=z_shape,
                     sampling_steps=sampling_steps,
                     clip_denoised=False,
+                    model_kwargs=_model_kwargs,
+                    guidance_scale=guidance_scale,
                 )
             else:
                 latent = diffusion.p_sample_loop(
                     unet,
                     shape=z_shape,
                     clip_denoised=False,
+                    model_kwargs=_model_kwargs,
+                    guidance_scale=guidance_scale,
                 )
             latent = latent / scale_factor
             samples = vae.decode(latent)
@@ -236,16 +261,17 @@ def save_diffusion_sampling_gif(model, diffusion, configs, num_samples=16, captu
     """
     model.eval()
     device = diffusion.betas.device
-    
+
     # Initialize recorder with appropriate save directory
     if save_dir is not None:
         recorder = SampleRecorder(configs, device=device, save_filename=filename, save_dir=save_dir, scale=scale)
     else:
         recorder = SampleRecorder(configs, device=device, scale=scale)
-    
+
     # 1. Initialize noise (x_T)
-    img_size = configs['model']['img_size']
-    channels = configs['model']['in_channels']
+    denoiser_cfg = configs["model"]["denoiser"]
+    img_size = int(denoiser_cfg['img_size'])
+    channels = int(denoiser_cfg['in_channels'])
     img = torch.randn((num_samples, channels, img_size, img_size), device=device)
     
     print("Sampling process visualization started...")
@@ -306,7 +332,7 @@ def save_diffusion_sampling_gif(model, diffusion, configs, num_samples=16, captu
         save_grid_image(img, final_path, scale=scale, normalize=None)
 
 
-def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=16, capture_interval=20, scale=4, save_dir=None, filename="sampling_process.gif", final_name=None, duration=200, sampling_steps=None):
+def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=16, capture_interval=20, scale=4, save_dir=None, filename="sampling_process.gif", final_name=None, duration=200, sampling_steps=None, model_kwargs=None, guidance_scale=None):
     vae = models["autoencoder"]
     model = models["denoiser"]
     vae.eval()
@@ -318,10 +344,14 @@ def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=1
     else:
         recorder = SampleRecorder(configs, device=device, scale=scale)
 
-    img_size = configs["model"]["img_size"]
-    channels = configs["model"]["in_channels"]
+    denoiser_cfg = configs["model"]["denoiser"]
+    img_size = int(denoiser_cfg["img_size"])
+    channels = int(denoiser_cfg["in_channels"])
     latent = torch.randn((num_samples, channels, img_size, img_size), device=device)
     scale_factor = float(configs["model"].get("autoencoder", {}).get("scale_factor", 1.0))
+
+    if guidance_scale is None:
+        guidance_scale = float(configs.get("conditioning", {}).get("cfg", {}).get("guidance_scale", 1.0))
 
     print("Stable diffusion sampling process visualization started...")
 
@@ -335,7 +365,7 @@ def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=1
             for i in range(total_steps):
                 t_val = diffusion.timesteps[i]
                 t = torch.full((num_samples,), t_val, device=device, dtype=torch.long)
-                latent = diffusion.p_sample(model, latent, t, i, clip_denoised=False)
+                latent = diffusion.p_sample(model, latent, t, i, clip_denoised=False, model_kwargs=model_kwargs, guidance_scale=guidance_scale)
 
                 if i % capture_interval == 0 or i == total_steps - 1:
                     decoded = vae.decode(latent / scale_factor)
@@ -345,7 +375,7 @@ def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=1
 
             for i in reversed(range(total_steps)):
                 t = torch.full((num_samples,), i, device=device, dtype=torch.long)
-                latent = diffusion.p_sample(model, latent, t, clip_denoised=False)
+                latent = diffusion.p_sample(model, latent, t, clip_denoised=False, model_kwargs=model_kwargs, guidance_scale=guidance_scale)
 
                 if i % capture_interval == 0 or i == 0:
                     decoded = vae.decode(latent / scale_factor)
