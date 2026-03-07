@@ -1,4 +1,5 @@
 import os
+import shutil
 import math
 import argparse
 import yaml
@@ -49,6 +50,12 @@ def prepare_output_dir(configs, config_path, resume_path):
 
     os.makedirs(os.path.join(output_dir, "checkpoints"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "visualization", "train"), exist_ok=True)
+
+    config_dest = os.path.join(output_dir, os.path.basename(config_path))
+    try:
+        shutil.copyfile(config_path, config_dest)
+    except Exception as e:
+        print(f"Warning: Failed to copy config file: {e}")
     return output_dir
 
 
@@ -244,8 +251,9 @@ def main():
             if disc_factor > 0.0:
                 optimizer_d.zero_grad()
 
-                disc_fake_pred = discriminator(outputs.detach())
-                disc_real_pred = discriminator(inputs)
+                disc_inputs = torch.cat([inputs, outputs.detach()], dim=0)
+                disc_preds = discriminator(disc_inputs)
+                disc_real_pred, disc_fake_pred = torch.chunk(disc_preds, 2, dim=0)
                 d_raw_loss = discriminator_criterion.discriminator_loss(disc_real_pred, disc_fake_pred)
                 d_loss = disc_factor * d_raw_loss
 
