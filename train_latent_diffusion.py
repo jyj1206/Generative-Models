@@ -39,6 +39,15 @@ def unwrap_model(model):
     return model.module if hasattr(model, "module") else model
 
 
+def parse_batch(batch):
+    if isinstance(batch, (list, tuple)):
+        if len(batch) >= 2:
+            return batch[0], batch[1]
+        if len(batch) == 1:
+            return batch[0], None
+    return batch, None
+
+
 def prepare_output_dir(configs, config_path, resume_path):
     run_name = os.path.splitext(os.path.basename(config_path))[0]
     configs["run_name"] = run_name
@@ -130,7 +139,7 @@ def load_resume_state(model, optimizer, device, resume_path, ema_model=None, res
 
 
 def load_vae_checkpoint(vae, configs, device):
-    checkpoint_path = configs["first_stage"].get("checkpoint_path", None)
+    checkpoint_path = configs["model"]["autoencoder"].get("checkpoint_path", None)
 
     if checkpoint_path is not None and os.path.exists(checkpoint_path):
         print(f"Loading VAE checkpoint from: {checkpoint_path}")
@@ -171,19 +180,42 @@ def main():
     train_loader = build_dataloader(configs)
 
     models = build_model(configs)
-    vae = models["first_stage"].to(device)
-    model = models["second_stage"].to(device)
+    vae = models["autoencoder"].to(device)
+    model = models["denoiser"].to(device)
+    text_encoder = models["text_encoder"].to(device) if "text_encoder" in models else None
+
+    use_text = (
+        configs.get("task") == "latent_diffusion"
+        and configs.get("conditioning", {}).get("type") == "text"
+        and text_encoder is not None
+    )
+
+    cfg_cfg = configs.get("conditioning", {}).get("cfg", {})
+    cfg_enabled = bool(cfg_cfg.get("enabled", False))
+    p_uncond = float(cfg_cfg.get("p_uncond", 0.0))
+
+    null_text = ""
+    base_uncond_context = None
+
+    if text_encoder is not None:
+        text_encoder.eval()
+        for param in text_encoder.parameters():
+            param.requires_grad = False
+
+    if use_text:
+        null_text = configs.get("conditioning", {}).get("text", {}).get("null_text", "")
+        with torch.no_grad():
+            base_uncond_context = text_encoder.encode_text([null_text], device=device)
 
     ema_model, ema_decay = setup_ema_model(model, configs, device)
 
     if distributed:
         model = DDP(model, device_ids=[local_rank])
 
-    # Load VAE (do NOT wrap in DDP)
     vae_to_use = load_vae_checkpoint(vae, configs, device)
     vae_to_use.eval()
 
-    scale_factor = configs.get("first_stage", {}).get("scale_factor", None)
+    scale_factor = configs["model"].get("autoencoder", {}).get("scale_factor", None)
     if scale_factor is None:
         if is_main():
             print("Computing latent scaling factor...")
@@ -206,7 +238,7 @@ def main():
         if is_main():
             print(f"Using config latent scaling factor: {scale_factor:.4f}")
 
-    configs["first_stage"]["scale_factor"] = scale_factor
+    configs["model"]["autoencoder"]["scale_factor"] = scale_factor
 
     optimizer = build_optimizer(model, configs)
     diffusion, num_timesteps = build_diffusion_scheduler(configs, device)
@@ -237,16 +269,44 @@ def main():
 
         pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{num_epochs}]", disable=not is_main())
 
-        for inputs, _ in pbar:
-            inputs = inputs.to(device)
+        for batch in pbar:
+            inputs, cond = parse_batch(batch)
+            inputs = inputs.to(device, non_blocking=True)
 
             optimizer.zero_grad()
 
             with torch.no_grad():
                 latent = vae_to_use.encode(inputs) * scale_factor
 
+            model_kwargs = None
+
+            if use_text:
+                if isinstance(cond, tuple):
+                    cond = list(cond)
+                elif isinstance(cond, str):
+                    cond = [cond]
+                elif not isinstance(cond, list):
+                    raise ValueError("Text conditioning is enabled, but dataset did not return text captions correctly.")
+
+                with torch.no_grad():
+                    context = text_encoder.encode_text(cond, device=device)
+
+                uncond_context = base_uncond_context.expand(context.size(0), -1, -1).contiguous()
+
+                if cfg_enabled and p_uncond > 0.0:
+                    drop_mask = torch.rand(context.size(0), device=device) < p_uncond
+                    if drop_mask.any():
+                        context = context.clone()
+                        context[drop_mask] = uncond_context[drop_mask]
+
+                model_kwargs = {
+                    "context": context,
+                    "uncond_context": uncond_context,
+                }
+
             t = torch.randint(0, num_timesteps, (latent.size(0),), device=device).long()
-            loss = diffusion.p_losses(model, latent, t)
+
+            loss = diffusion.p_losses(model, latent, t, model_kwargs=model_kwargs)
             loss.backward()
             optimizer.step()
 
@@ -257,7 +317,12 @@ def main():
             iterations += 1
 
             if is_main():
-                pbar.set_postfix({"loss": f"{loss.item():.6f}", "iter": iterations})
+                pbar.set_postfix(
+                    {
+                        "loss": f"{loss.item():.6f}",
+                        "iter": iterations,
+                    }
+                )
 
         avg_train_loss = train_loss_sum / len(train_loader)
         avg_train_loss_tensor = torch.tensor(avg_train_loss, device=device)
@@ -273,17 +338,19 @@ def main():
             print(f"Epoch [{epoch}/{num_epochs}] Done. | Train Loss: {avg_train_loss:.6f}")
 
             if epoch % 25 == 0:
-                if ema_enabled:
-                    second_stage_to_use = ema_model
-                else:
-                    second_stage_to_use = unwrap_model(model)
+                denoiser_to_use = ema_model if ema_enabled else unwrap_model(model)
 
                 reference_model = {
-                    "first_stage": vae_to_use,
-                    "second_stage": second_stage_to_use,
+                    "autoencoder": vae_to_use,
+                    "denoiser": denoiser_to_use,
                 }
-                reference_model["first_stage"].eval()
-                reference_model["second_stage"].eval()
+
+                if use_text:
+                    reference_model["text_encoder"] = text_encoder
+                    reference_model["text_encoder"].eval()
+
+                reference_model["autoencoder"].eval()
+                reference_model["denoiser"].eval()
 
                 generate_and_save_samples(
                     reference_model,
@@ -307,17 +374,19 @@ def main():
                 )
 
     if is_main():
-        if ema_enabled:
-            second_stage_to_use = ema_model
-        else:
-            second_stage_to_use = unwrap_model(model)
+        denoiser_to_use = ema_model if ema_enabled else unwrap_model(model)
 
         reference_model = {
-            "first_stage": vae_to_use,
-            "second_stage": second_stage_to_use,
+            "autoencoder": vae_to_use,
+            "denoiser": denoiser_to_use,
         }
-        reference_model["first_stage"].eval()
-        reference_model["second_stage"].eval()
+
+        if use_text:
+            reference_model["text_encoder"] = text_encoder
+            reference_model["text_encoder"].eval()
+
+        reference_model["autoencoder"].eval()
+        reference_model["denoiser"].eval()
 
         generate_and_save_samples(
             reference_model,

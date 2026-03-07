@@ -15,7 +15,7 @@ model:
 
 dataset:
   name: custom
-  root: ./data/celeba_hq_256
+  root: ./data/CelebA-HQ-img
   in_channels: 3
   img_size: 256
 

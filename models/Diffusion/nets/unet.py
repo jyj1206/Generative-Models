@@ -148,16 +148,16 @@ class AdaptiveResBlock(nn.Module):
         return h + shortcut
 
 
-class AttentionBlock(nn.Module):
-    def __init__(self, dim, num_heads=4, dim_head=64): 
+class SelfAttentionBlock(nn.Module):
+    def __init__(self, dim, num_heads=4, dim_head=64):
         super().__init__()
         self.heads = num_heads
         self.dim_head = dim_head
         self.scale = dim_head ** -0.5
         inner_dim = dim_head * num_heads
         
-        self.norm = nn.GroupNorm(32, dim) 
-        self.to_qkv = nn.Conv2d(dim, inner_dim * 3, 1, bias=False) 
+        self.norm = nn.GroupNorm(32, dim)
+        self.to_qkv = nn.Conv2d(dim, inner_dim * 3, 1, bias=False)
         self.to_out = nn.Conv2d(inner_dim, dim, 1)
 
     def forward(self, x):
@@ -174,9 +174,85 @@ class AttentionBlock(nn.Module):
         attn = attn.softmax(dim=-1)
         
         out = attn @ v.transpose(-2, -1)
-        out = out.transpose(-2, -1).reshape(b, -1, h, w)
+        out = out.transpose(-2, -1).contiguous().reshape(b, -1, h, w)
         out = self.to_out(out)
         return x + out
+    
+    
+class CrossAttentionBlock(nn.Module):
+    def __init__(self, dim, context_dim, num_heads=4, dim_head=64):
+        super().__init__()
+        self.heads = num_heads
+        self.dim_head = dim_head
+        self.scale = dim_head ** -0.5
+        inner_dim = dim_head * num_heads
+
+        self.norm = nn.GroupNorm(32, dim)
+        self.context_norm = nn.LayerNorm(context_dim)
+
+        self.to_q = nn.Conv2d(dim, inner_dim, 1, bias=False)
+        self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
+        self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
+        self.to_out = nn.Conv2d(inner_dim, dim, 1)
+
+    def forward(self, x, context):
+        if context.dim() == 2:
+            context = context.unsqueeze(1)
+
+        b, c, h, w = x.shape
+        n_ctx = context.shape[1]
+
+        x_norm = self.norm(x)
+        context = self.context_norm(context)
+
+        q = self.to_q(x_norm)
+        q = q.reshape(b, self.heads, self.dim_head, h * w).transpose(-2, -1)
+
+        k = self.to_k(context).view(b, n_ctx, self.heads, self.dim_head).transpose(1, 2)
+        v = self.to_v(context).view(b, n_ctx, self.heads, self.dim_head).transpose(1, 2)
+
+        attn = q @ k.transpose(-2, -1) * self.scale
+        attn = attn.softmax(dim=-1)
+
+        out = attn @ v
+        out = out.transpose(-2, -1).contiguous().reshape(b, -1, h, w)
+        out = self.to_out(out)
+        return x + out
+    
+    
+class FeedForwardBlock(nn.Module):
+    def __init__(self, dim, mult=4):
+        super().__init__()
+        hidden_dim = dim * mult
+        self.norm = nn.GroupNorm(32, dim)
+        self.net = nn.Sequential(
+            nn.Conv2d(dim, hidden_dim, 1),
+            nn.SiLU(),
+            nn.Conv2d(hidden_dim, dim, 1),
+        )
+
+    def forward(self, x):
+        return self.net(self.norm(x))    
+    
+
+class AttentionBlock(nn.Module):
+    def __init__(self, dim, context_dim=None, num_heads=4, dim_head=64, ff_mult=4):
+        super().__init__()
+        self.self_attn = SelfAttentionBlock(dim, num_heads=num_heads, dim_head=dim_head)
+        self.cross_attn = (
+            CrossAttentionBlock(dim, context_dim, num_heads=num_heads, dim_head=dim_head)
+            if context_dim is not None else None
+        )
+        self.ff = FeedForwardBlock(dim, mult=ff_mult)
+
+    def forward(self, x, context=None):
+        x = self.self_attn(x)
+
+        if self.cross_attn is not None and context is not None:
+            x = self.cross_attn(x, context)
+            x = x + self.ff(x)
+
+        return x   
         
         
 class Downsample(nn.Module):
@@ -215,8 +291,9 @@ class Upsample(nn.Module):
 
 class UNet(nn.Module):
     def __init__(self, dim, init_dim=None, dim_mults=(1, 2, 2, 2), attn_layers=(16,), 
-                 num_res_blocks = 2, dropout=0.0, in_channels=3, image_size=32,
-                 num_classes=None, use_biggan_resample=False):
+             num_res_blocks = 2, dropout=0.0, in_channels=3, image_size=32,
+             num_classes=None, use_biggan_resample=False,
+             context_dim=None, attn_heads=4, attn_dim_head=64):
         super().__init__()
 
         init_dim = dim if init_dim is None else init_dim 
@@ -252,7 +329,12 @@ class UNet(nn.Module):
             for _ in range(num_res_blocks):
                 self.downs.append(nn.ModuleList([
                     ResBlockType(cur_channels, dim_out, time_emb_dim=time_dim, dropout=dropout),
-                    AttentionBlock(dim_out) if use_attn else nn.Identity()
+                    AttentionBlock(
+                        dim_out,
+                        context_dim=context_dim,
+                        num_heads=attn_heads,
+                        dim_head=attn_dim_head
+                    ) if use_attn else nn.Identity()
                 ]))
                 cur_channels = dim_out
                 skip_channels_list.append(cur_channels)
@@ -272,7 +354,12 @@ class UNet(nn.Module):
         
         # Mid Block (Bottleneck)
         self.mid_block1 = ResBlockType(cur_channels, cur_channels, time_emb_dim=time_dim, dropout=dropout)
-        self.mid_attn = AttentionBlock(cur_channels)
+        self.mid_attn = AttentionBlock(
+                            cur_channels,
+                            context_dim=context_dim,
+                            num_heads=attn_heads,
+                            dim_head=attn_dim_head
+                        )
         self.mid_block2 = ResBlockType(cur_channels, cur_channels, time_emb_dim=time_dim, dropout=dropout)
         
         # Up Block (Decoder)
@@ -286,7 +373,12 @@ class UNet(nn.Module):
                 skip_channels = skip_channels_list.pop()
                 self.ups.append(nn.ModuleList([
                     ResBlockType(cur_channels + skip_channels, dim_out, time_emb_dim=time_dim, dropout=dropout),
-                    AttentionBlock(dim_out) if use_attn else nn.Identity(),
+                    AttentionBlock(
+                        dim_out,
+                        context_dim=context_dim,
+                        num_heads=attn_heads,
+                        dim_head=attn_dim_head
+                    ) if use_attn else nn.Identity()
                 ]))
                 
                 cur_channels = dim_out
@@ -309,11 +401,13 @@ class UNet(nn.Module):
             nn.Conv2d(dim, in_channels, 1)
         )
         
-    def forward(self, x, time, y=None):
+    def forward(self, x, time, y=None, context=None):
         """
         Args:
             x: Input Image (Batch, C, H, W)
             time: Timesteps (Batch,)
+            y: Class labels (Batch,)
+            context: Context tensor (Batch, Seq_len, Dim)
         Returns:
             out: Output noise prediction (Batch, C, H, W)
         """
@@ -335,12 +429,17 @@ class UNet(nn.Module):
             
             res_block, attn_block = down_block
             x = res_block(x, time_emb)
-            x = attn_block(x)
+            
+            if isinstance(attn_block, nn.Identity):
+                x = attn_block(x)
+            else:
+                x = attn_block(x, context=context)
+                
             skip_connections.append(x)
     
         # Bottleneck
         x = self.mid_block1(x, time_emb)
-        x = self.mid_attn(x)
+        x = self.mid_attn(x, context=context)
         x = self.mid_block2(x, time_emb)
         
         # Upsample
@@ -358,7 +457,10 @@ class UNet(nn.Module):
                 x = torch.cat((x, skip_connection), dim=1)
                 x = res_block(x, time_emb)
                 
-            x = attn_block(x)
+            if isinstance(attn_block, nn.Identity):
+                x = attn_block(x)
+            else:
+                x = attn_block(x, context=context)
 
         x = self.final_conv(x)
         return x

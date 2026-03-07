@@ -86,11 +86,10 @@ def main():
 
     task = configs["task"]
 
-    if task in ("diffusion", "stable_diffusion"):
-        diffuser = configs.get("diffusion", {}).get("diffuser")
-        if diffuser:
-            diffuser_name = diffuser.replace("_scheduler", "")
-            inference_dir = os.path.join(inference_dir, diffuser_name)
+    if task in ("diffusion", "latent_diffusion"):
+        scheduler = configs.get("diffusion", {}).get("scheduler")
+        if scheduler:
+            inference_dir = os.path.join(inference_dir, scheduler)
     os.makedirs(inference_dir, exist_ok=True)
 
     model = build_model(configs)
@@ -103,12 +102,12 @@ def main():
         vqvae.eval()
         generator = vqvae
 
-    elif task == "stable_diffusion":
-        vae = model['first_stage'].to(device)
-        unet = model['second_stage'].to(device)
+    elif task == "latent_diffusion":
+        vae = model['autoencoder'].to(device)
+        unet = model['denoiser'].to(device)
 
         # Load VAE checkpoint from config
-        vae_path = configs.get("first_stage", {}).get("checkpoint_path")
+        vae_path = configs["model"].get("autoencoder", {}).get("checkpoint_path")
         vae = load_vae_checkpoint(vae, vae_path, device)
         vae.eval()
 
@@ -116,7 +115,7 @@ def main():
         load_checkpoint(unet, args.model_path, device)
         unet.eval()
 
-        generator = {'first_stage': vae, 'second_stage': unet}
+        generator = {'autoencoder': vae, 'denoiser': unet}
     else:
         load_checkpoint(model, args.model_path, device)
         model.to(device)
@@ -152,19 +151,20 @@ def main():
     # --- Build diffusion scheduler if needed ---
     diffusion = None
     use_cfg = False
-    if task in ("diffusion", "stable_diffusion"):
+    if task in ("diffusion", "latent_diffusion"):
         diffusion, _ = build_diffusion_scheduler(configs, device)
 
         if task == "diffusion":
-            use_cfg = configs.get("diffusion", {}).get("use_cfg", False)
+            cfg_cfg = configs.get("conditioning", {}).get("cfg", {})
+            use_cfg = cfg_cfg.get("enabled", False)
 
             # Validate class_id if provided
             if args.class_id is not None:
                 if not use_cfg:
                     raise ValueError("class_id was provided but use_cfg=False in config.")
-                num_classes = configs.get("dataset", {}).get("num_classes", None)
+                num_classes = configs.get("conditioning", {}).get("class", {}).get("num_classes", None)
                 if num_classes is None:
-                    raise ValueError("class_id requires dataset.num_classes to be set in config.")
+                    raise ValueError("class_id requires conditioning.class.num_classes to be set in config.")
                 if args.class_id < 0 or args.class_id >= int(num_classes):
                     raise ValueError(f"class_id must be in [0, {int(num_classes) - 1}].")
 
@@ -186,7 +186,7 @@ def main():
         generator,
         configs,
         device,
-        diffusion=diffusion if task in ("diffusion", "stable_diffusion") else None,
+        diffusion=diffusion if task in ("diffusion", "latent_diffusion") else None,
         sampling_steps=args.sampling_steps,
         use_cfg=use_cfg,
         class_id=args.class_id,
@@ -225,7 +225,7 @@ def main():
             duration=args.gif_duration,
             sampling_steps=args.sampling_steps
         )
-    elif task == "stable_diffusion" and args.diffusion_gif:
+    elif task == "latent_diffusion" and args.diffusion_gif:
         gif_name = append_timestamp(args.gif_name, timestamp)
         final_name = append_timestamp(args.gif_final_name, timestamp)
         save_stable_diffusion_sampling_gif(

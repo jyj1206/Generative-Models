@@ -95,37 +95,34 @@ def generate_and_save_samples(model, configs, device, diffusion=None, num_sample
             samples = samples.detach().cpu()
             default_filename = f"diffusion_generated_samples_epoch_{epoch}.png" if epoch else "diffusion_generated_samples_final.png"
         
-        elif task == "stable_diffusion":
+        elif task == "latent_diffusion":
             if diffusion is None:
-                raise ValueError("Diffusion scheduler is required for stable diffusion task.")
-            
-            vae = model['first_stage']
-            model = model['second_stage']
+                raise ValueError("Diffusion scheduler is required for latent_diffusion task.")
+            vae = model['autoencoder']
+            unet = model['denoiser']
             vae.eval()
-            model.eval()
-            
-            scale_factor = float(configs.get("first_stage", {}).get("scale_factor", 1.0))
-            
+            unet.eval()
+            scale_factor = float(configs["model"].get("autoencoder", {}).get("scale_factor", 1.0))
             z_shape = (num_samples, configs["model"]['in_channels'], configs["model"]['img_size'], configs["model"]['img_size'])
             if hasattr(diffusion, "_set_timesteps"):
                 if sampling_steps is None:
                     sampling_steps = int(configs.get("diffusion", {}).get("sampling_steps", 50))
                 latent = diffusion.p_sample_loop(
-                    model,
+                    unet,
                     shape=z_shape,
                     sampling_steps=sampling_steps,
                     clip_denoised=False,
                 )
             else:
                 latent = diffusion.p_sample_loop(
-                    model,
+                    unet,
                     shape=z_shape,
                     clip_denoised=False,
                 )
             latent = latent / scale_factor
             samples = vae.decode(latent)
             samples = samples.detach().cpu()
-            default_filename = f"stable_diffusion_generated_samples_epoch_{epoch}.png" if epoch else "stable_diffusion_generated_samples_final.png"
+            default_filename = f"latent_diffusion_generated_samples_epoch_{epoch}.png" if epoch else "latent_diffusion_generated_samples_final.png"
         else:
             raise ValueError(f"Unsupported task: {task}")
     
@@ -310,8 +307,8 @@ def save_diffusion_sampling_gif(model, diffusion, configs, num_samples=16, captu
 
 
 def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=16, capture_interval=20, scale=4, save_dir=None, filename="sampling_process.gif", final_name=None, duration=200, sampling_steps=None):
-    vae = models["first_stage"]
-    model = models["second_stage"]
+    vae = models["autoencoder"]
+    model = models["denoiser"]
     vae.eval()
     model.eval()
     device = diffusion.betas.device
@@ -324,7 +321,7 @@ def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=1
     img_size = configs["model"]["img_size"]
     channels = configs["model"]["in_channels"]
     latent = torch.randn((num_samples, channels, img_size, img_size), device=device)
-    scale_factor = float(configs.get("first_stage", {}).get("scale_factor", 1.0))
+    scale_factor = float(configs["model"].get("autoencoder", {}).get("scale_factor", 1.0))
 
     print("Stable diffusion sampling process visualization started...")
 

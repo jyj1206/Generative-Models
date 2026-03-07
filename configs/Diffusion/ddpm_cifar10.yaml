@@ -4,15 +4,19 @@ run_time:
   gpu_ids: [0]
 
 model:
-  type: ddpm
-  img_size: 32
-  in_channels: 3 # RGB:3 / Grayscale:1
-  num_res_blocks: 2
-  dim: 128
-  dim_mults: [1, 2, 2, 2]
-  attn_layers: [16]
-  dropout: 0.1
-  use_biggan_resample: false
+  denoiser:
+    type: ddpm
+    img_size: 32
+    in_channels: 3
+    num_res_blocks: 2
+    dim: 128
+    dim_mults: [1, 2, 2, 2]
+    attn_layers: [16]
+    dropout: 0.1
+    use_biggan_resample: false
+
+conditioning:
+  type: none
 
 dataset:
   name: cifar10
@@ -31,9 +35,8 @@ train:
   ema_decay: 0.9999
 
 diffusion:
-  diffuser: ddpm_scheduler
+  scheduler: ddpm
   num_timesteps: 1000
   beta_start: 0.0001
   beta_end: 0.02
   variance_type: fixed_small
-  use_cfg: false  # Unconditional generation

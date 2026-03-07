@@ -173,9 +173,10 @@ def main():
     diffusion, num_timesteps = build_diffusion_scheduler(configs, device)
     num_epochs = compute_num_epochs(train_loader, configs)
 
-    diffusion_cfg = configs.get("diffusion", {})
-    use_cfg = diffusion_cfg.get("use_cfg", False)
-    p_uncond = float(diffusion_cfg.get("p_uncond", 0.0)) if use_cfg else 0.0
+    conditioning_cfg = configs.get("conditioning", {})
+    cfg_cfg = conditioning_cfg.get("cfg", {})
+    use_cfg = cfg_cfg.get("enabled", False)
+    p_uncond = float(cfg_cfg.get("p_uncond", 0.0)) if use_cfg else 0.0
 
     if use_cfg:
         if configs.get("dataset", {}).get("num_classes") is None:

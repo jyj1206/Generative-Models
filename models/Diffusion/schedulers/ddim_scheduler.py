@@ -32,15 +32,17 @@ class DDIMScheduler(GaussianDiffusion):
             x_in = torch.cat([x, x], dim=0)
             t_in = torch.cat([t, t], dim=0)
             
-            uncond_kwargs = {
-                k: torch.full_like(v, self.null_token_idx) 
-                for k, v in model_kwargs.items()
-            }
+            if 'y' in model_kwargs:
+                uncond_kwargs = {'y': torch.full_like(model_kwargs['y'], self.null_token_idx)}
+                
+                combined_kwargs = {'y': torch.cat([model_kwargs['y'], uncond_kwargs['y']], dim=0)}
             
-            combined_kwargs = {
-                k: torch.cat([v, uncond_kwargs[k]], dim=0)
-                for k, v in model_kwargs.items()
-            }
+            elif 'context' in model_kwargs and 'uncond_context' in model_kwargs:
+                combined_kwargs = {'context': torch.cat([model_kwargs['context'], model_kwargs['uncond_context']], dim=0)} 
+                
+            else:
+                raise ValueError("For classifier-free guidance, model_kwargs must contain either 'y' or both 'context' and 'uncond_context'")
+             
             model_out = model(x_in, t_in, **combined_kwargs)
             out_cond, out_uncond = model_out.chunk(2, dim=0)
             pred_noise = out_uncond + guidance_scale * (out_cond - out_uncond)

@@ -4,39 +4,39 @@ run_time:
   gpu_ids: [0]
 
 model:
-  type: ddpm
-  img_size: 128          
-  in_channels: 3
-  num_res_blocks: 2      
-  dim: 128                 
-  
-  dim_mults: [1, 2, 4, 8]
-  
-  attn_layers: [16]
-  
-  dropout: 0.0
-  use_biggan_resample: false
+  denoiser:
+    type: ddpm
+    img_size: 128
+    in_channels: 3
+    num_res_blocks: 2
+    dim: 128
+    dim_mults: [1, 2, 4, 8]
+    attn_layers: [16]
+    dropout: 0.0
+    use_biggan_resample: false
+
+conditioning:
+  type: none
 
 dataset:
   name: custom
-  root: ./data/celeba_hq_256
+  root: ./data/CelebA-HQ-img
   in_channels: 3
   img_size: 128
 
 train:
-  epochs: 500              
-  batch_size: 8           
+  epochs: 500
+  batch_size: 8
   num_workers: 4
-  learning_rate: 0.00002   
+  learning_rate: 0.00002
   loss_fn: mse
   optimizer: adam
   ema: true
   ema_decay: 0.9999
 
 diffusion:
-  diffuser: ddpm_scheduler 
+  scheduler: ddpm
   num_timesteps: 1000
   beta_start: 0.0001
   beta_end: 0.02
   variance_type: fixed_small
-  use_cfg: false  # Unconditional generation

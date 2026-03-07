@@ -53,13 +53,15 @@ def build_model(configs):
             else:
                 raise ValueError(f"Unknown regularization type for vqvae model: {reg_type}")
 
+            discriminator = PatchGANDiscriminator(
+                    in_channels=int(configs["model"]['in_channels']),
+                    init_weights=disc_init_weights,
+            )
+            
             model = {
                 'vqvae': autoencoder,
                 'lpips': LPIPS(),
-                'discriminator': PatchGANDiscriminator(
-                    in_channels=int(configs["model"]['in_channels']),
-                    init_weights=disc_init_weights,
-                )
+                'discriminator': discriminator
             }
         else:
             raise ValueError(f"Unknown VAE model: {model_type}")
@@ -84,63 +86,95 @@ def build_model(configs):
             raise ValueError(f"Unknown GAN model: {model_type}")
 
     elif task == 'diffusion':   
+        denoiser_cfg = configs["model"]["denoiser"]
+        model_type = denoiser_cfg["type"]
         if model_type in ['ddpm', 'ddim']:
             from models.Diffusion.nets.unet import UNet
 
             model = UNet(
-                dim=int(configs["model"]["dim"]),
-                dim_mults=configs["model"]["dim_mults"],
-                attn_layers=configs["model"].get("attn_layers", []),
-                num_res_blocks=int(configs["model"].get("num_res_blocks", 2)),
-                dropout=float(configs["model"].get("dropout", 0.0)),
-                in_channels=int(configs["model"]["in_channels"]),
-                image_size=int(configs["model"]["img_size"]),
-                num_classes=configs.get("dataset", {}).get("num_classes", None),
-                use_biggan_resample=bool(configs["model"].get("use_biggan_resample", False)),
+                dim=int(denoiser_cfg["dim"]),
+                dim_mults=denoiser_cfg["dim_mults"],
+                attn_layers=denoiser_cfg.get("attn_layers", []),
+                num_res_blocks=int(denoiser_cfg.get("num_res_blocks", 2)),
+                dropout=float(denoiser_cfg.get("dropout", 0.0)),
+                in_channels=int(denoiser_cfg["in_channels"]),
+                image_size=int(denoiser_cfg["img_size"]),
+                num_classes=configs.get("conditioning", {}).get("class", {}).get("num_classes", None),
+                use_biggan_resample=bool(denoiser_cfg.get("use_biggan_resample", False)),
             )
         else:
              raise ValueError(f"Unknown diffusion model: {model_type}")
     
-    elif task == 'stable_diffusion':
+    elif task == 'latent_diffusion':
         if model_type in ['ddpm', 'ddim']:
             from models.Diffusion.nets.unet import UNet
-            
-            reg_type = configs["first_stage"].get("reg_type", "vq")
-            first_stage_cfg = configs["first_stage"]
-            
+
+            # Autoencoder
+            reg_type = configs["model"]["autoencoder"].get("reg_type", "vq")
+            autoencoder_cfg = configs["model"]["autoencoder"]
+
             if reg_type == "vq":
                 from models.VAE.nets.vqvae import VQVAEInterface
-                latent_dim = int(first_stage_cfg.get("latent_dim", configs["model"]["in_channels"]))
-                first_stage = VQVAEInterface(
+                latent_dim = int(autoencoder_cfg.get("latent_dim", configs["model"]["denoiser"]["in_channels"]))
+                autoencoder = VQVAEInterface(
                     embed_dim=latent_dim,
-                    in_channels=int(first_stage_cfg.get("in_channels", 3)),
+                    in_channels=int(autoencoder_cfg.get("in_channels", 3)),
                     z_channels=latent_dim,
-                    codebook_size=int(first_stage_cfg.get("num_embeddings", 8192)),
+                    codebook_size=int(autoencoder_cfg.get("num_embeddings", 8192)),
                 )
             elif reg_type == "kl":
                 from models.VAE.nets.vae import VAE
-                first_stage = VAE(
-                    in_channels=int(first_stage_cfg.get('in_channels', 3)),
-                    z_channels=int(first_stage_cfg["latent_dim"]),
+                autoencoder = VAE(
+                    in_channels=int(autoencoder_cfg.get('in_channels', 3)),
+                    z_channels=int(autoencoder_cfg["latent_dim"]),
                 )
             else:
-                raise ValueError(f"Unknown regularization type for first stage model: {reg_type}")
-            
-            second_stage =  UNet(
-                    dim=int(configs["model"]["dim"]),
-                    dim_mults=configs["model"]["dim_mults"],
-                    attn_layers=configs["model"].get("attn_layers", []),
-                    num_res_blocks=int(configs["model"].get("num_res_blocks", 2)),
-                    dropout=float(configs["model"].get("dropout", 0.0)),
-                    in_channels=int(configs["model"]["in_channels"]),
-                    image_size=int(configs["model"]["img_size"]),
+                raise ValueError(f"Unknown regularization type for autoencoder model: {reg_type}")
+
+            # Denoiser UNet
+            denoiser_cfg = configs["model"]["denoiser"]
+            denoiser =  UNet(
+                    dim=int(denoiser_cfg["dim"]),
+                    dim_mults=denoiser_cfg["dim_mults"],
+                    attn_layers=denoiser_cfg.get("attn_layers", []),
+                    num_res_blocks=int(denoiser_cfg.get("num_res_blocks", 2)),
+                    dropout=float(denoiser_cfg.get("dropout", 0.0)),
+                    in_channels=int(denoiser_cfg["in_channels"]),
+                    image_size=int(denoiser_cfg["img_size"]),
                     num_classes=configs.get("dataset", {}).get("num_classes", None),
-                    use_biggan_resample=bool(configs["model"].get("use_biggan_resample", False)),
+                    use_biggan_resample=bool(denoiser_cfg.get("use_biggan_resample", False)),
                 )
             
+            # Condictioning config
+            conditioning_cfg = configs.get("conditioning", {})
+            condition_type = conditioning_cfg.get("type", None)
+            if condition_type == 'text':
+                text_cfg = conditioning_cfg.get("text", {})
+                if text_cfg:
+                    encoder_type = text_cfg.get("encoder", "bert")
+                    if encoder_type == "bert":
+                        from models.others.text_encoders import BERTTextEncoderWrapper
+                        text_encoder = BERTTextEncoderWrapper(
+                            model_name=text_cfg.get("pretrained_model_name", "bert-base-uncased"),
+                            freeze=bool(text_cfg.get("freeze", True)),
+                        )
+                    elif encoder_type == "clip":
+                        from models.others.text_encoders import CLIPTextEncoderWrapper
+                        text_encoder = CLIPTextEncoderWrapper(
+                            model_name=text_cfg.get("pretrained_model_name", "openai/clip-vit-base-patch32"),
+                            freeze=bool(text_cfg.get("freeze", True)),
+                        )
+                    else:
+                            raise ValueError(f"Unknown text encoder type: {encoder_type}")
+                else:
+                    raise ValueError("Text conditioning is enabled but no text config provided.")                
+            else:
+                text_encoder = None    
+
             model = {
-                'first_stage': first_stage,
-                'second_stage': second_stage
+                'autoencoder': autoencoder,
+                'denoiser': denoiser,
+                'text_encoder': text_encoder,
             }
         else:
              raise ValueError(f"Unknown stable diffusion model: {model_type}")
@@ -231,22 +265,22 @@ def build_optimizer(model, configs):
 def build_diffusion_scheduler(configs, device):
     from models.Diffusion.schedulers.gaussian_diffusion import linear_beta_schedule
 
-    num_timesteps = int(configs["diffusion"]['num_timesteps'])
+    num_timesteps = int(configs["diffusion"]["num_timesteps"])
 
     betas = linear_beta_schedule(
         timesteps=num_timesteps,
-        beta_start=float(configs["diffusion"]['beta_start']),
-        beta_end=float(configs["diffusion"]['beta_end'])
+        beta_start=float(configs["diffusion"]["beta_start"]),
+        beta_end=float(configs["diffusion"]["beta_end"])
     )
 
-    scheduler = configs['diffusion'].get('diffuser', 'ddpm_scheduler')
-    scheduler_kwargs = {"null_token_idx": configs.get("dataset", {}).get("num_classes", None)}
-    
-    if scheduler == 'ddpm_scheduler':
+    scheduler = configs["diffusion"].get("scheduler", "ddpm")
+    scheduler_kwargs = {"null_token_idx": configs.get("conditioning", {}).get("class", {}).get("num_classes", None)}
+
+    if scheduler == 'ddpm':
         from models.Diffusion.schedulers.ddpm_scheduler import DDPMScheduler
         scheduler_kwargs["variance_type"] = configs["diffusion"].get("variance_type", "fixed_small")
         DiffusionScheduler = DDPMScheduler
-    elif scheduler == 'ddim_scheduler':
+    elif scheduler == 'ddim':
         from models.Diffusion.schedulers.ddim_scheduler import DDIMScheduler
         DiffusionScheduler = DDIMScheduler
     else:

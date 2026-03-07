@@ -28,5 +28,5 @@ def get_output_dir(configs):
     run_name = configs.get("run_name")
     if run_name:
         return os.path.join("output", run_name)
-    task = configs.get("task", "task")
+    task = configs.get("task", "latent_diffusion")
     return os.path.join("output", task)

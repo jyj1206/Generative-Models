@@ -1,0 +1,58 @@
+task: latent_diffusion
+
+run_time:
+  gpu_ids: [0]
+
+model:
+  autoencoder:
+    type: vqgan
+    reg_type: vq
+    img_size: 256
+    latent_dim: 4
+    checkpoint_path: ./output/vae/vqvae_vq_celebA_HQ_03030151/checkpoints/vqvae_autoencoder_final.pth
+  denoiser:
+    type: ddpm
+    img_size: 32
+    in_channels: 4
+    num_res_blocks: 2
+    dim: 64
+    dim_mults: [1, 2, 4, 8]
+    attn_layers: [8, 16]
+    dropout: 0.0
+    use_biggan_resample: false
+
+conditioning:
+  type: text
+  text:
+    encoder_type: bert
+    pretrained_name: bert-base-uncased
+    max_length: 77
+    freeze: true
+    null_text: ""
+  cfg:
+    enabled: True
+    p_uncond: 0.0
+    guidance_scale: 1.0
+
+dataset:
+  name: custom
+  root: ./data/CelebA-HQ-img
+  in_channels: 3
+  img_size: 256
+
+  text:
+    root: ./data/CelebA-HQ-captions
+
+train:
+  iterations: 300000
+  batch_size: 64
+  num_workers: 4
+  learning_rate: 0.0002
+  ema_decay: 0.9999
+
+diffusion:
+  scheduler: ddpm
+  num_timesteps: 1000
+  beta_start: 0.0001
+  beta_end: 0.02
+  variance_type: fixed_small
