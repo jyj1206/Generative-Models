@@ -1,4 +1,5 @@
 import os
+import shutil
 import math
 import argparse
 import yaml
@@ -49,6 +50,12 @@ def prepare_output_dir(configs, config_path, resume_path):
 
     os.makedirs(os.path.join(output_dir, "checkpoints"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "visualization", "train"), exist_ok=True)
+
+    config_dest = os.path.join(output_dir, os.path.basename(config_path))
+    try:
+        shutil.copyfile(config_path, config_dest)
+    except Exception as e:
+        print(f"Warning: Failed to copy config file: {e}")
     return output_dir
 
 
