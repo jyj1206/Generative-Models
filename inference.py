@@ -261,6 +261,23 @@ def main():
     elif task == "latent_diffusion" and args.diffusion_gif:
         gif_name = append_timestamp(args.gif_name, timestamp)
         final_name = append_timestamp(args.gif_final_name, timestamp)
+
+        gif_model_kwargs = None
+        gif_text_encoder = generator.get('text_encoder', None)
+        if gif_text_encoder is not None:
+            gif_num_samples = 16
+            null_text = configs.get("conditioning", {}).get("text", {}).get("null_text", "")
+            with torch.no_grad():
+                if args.condition_text is not None:
+                    gif_context = gif_text_encoder.encode_text([args.condition_text] * gif_num_samples, device=device)
+                else:
+                    gif_context = gif_text_encoder.encode_text([null_text] * gif_num_samples, device=device)
+                if args.uncondition_text is not None:
+                    gif_uncond = gif_text_encoder.encode_text([args.uncondition_text] * gif_num_samples, device=device)
+                else:
+                    gif_uncond = gif_text_encoder.encode_text([null_text] * gif_num_samples, device=device)
+            gif_model_kwargs = {"context": gif_context, "uncond_context": gif_uncond}
+
         save_stable_diffusion_sampling_gif(
             generator,
             diffusion,
@@ -273,7 +290,7 @@ def main():
             final_name=final_name,
             duration=args.gif_duration,
             sampling_steps=args.sampling_steps,
-            model_kwargs=model_kwargs,
+            model_kwargs=gif_model_kwargs,
             guidance_scale=args.guidance_scale,
         )
 

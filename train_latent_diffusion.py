@@ -357,8 +357,18 @@ def main():
                 if use_text:
                     reference_model["text_encoder"] = text_encoder
                     reference_model["text_encoder"].eval()
+                    sample_batch = next(iter(train_loader))
+                    _, sample_captions = parse_batch(sample_batch)
+                    if isinstance(sample_captions, (tuple, list)):
+                        sample_captions = list(sample_captions)[:16]
+                    elif isinstance(sample_captions, str):
+                        sample_captions = [sample_captions]
+                    else:
+                        sample_captions = [str(c) for c in sample_captions][:16]
+                    while len(sample_captions) < 16:
+                        sample_captions.append(sample_captions[-1])
                     with torch.no_grad():
-                        mid_context = text_encoder.encode_text([null_text] * 16, device=device)
+                        mid_context = text_encoder.encode_text(sample_captions, device=device)
                         mid_uncond = base_uncond_context.expand(16, -1, -1).contiguous()
                     mid_model_kwargs = {"context": mid_context, "uncond_context": mid_uncond}
 
@@ -399,8 +409,18 @@ def main():
         if use_text:
             reference_model["text_encoder"] = text_encoder
             reference_model["text_encoder"].eval()
+            sample_batch = next(iter(train_loader))
+            _, sample_captions = parse_batch(sample_batch)
+            if isinstance(sample_captions, (tuple, list)):
+                sample_captions = list(sample_captions)[:16]
+            elif isinstance(sample_captions, str):
+                sample_captions = [sample_captions]
+            else:
+                sample_captions = [str(c) for c in sample_captions][:16]
+            while len(sample_captions) < 16:
+                sample_captions.append(sample_captions[-1])
             with torch.no_grad():
-                sample_context = text_encoder.encode_text([null_text] * 16, device=device)
+                sample_context = text_encoder.encode_text(sample_captions, device=device)
                 sample_uncond = base_uncond_context.expand(16, -1, -1).contiguous()
             sample_model_kwargs = {"context": sample_context, "uncond_context": sample_uncond}
 

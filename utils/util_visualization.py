@@ -335,6 +335,7 @@ def save_diffusion_sampling_gif(model, diffusion, configs, num_samples=16, captu
 def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=16, capture_interval=20, scale=4, save_dir=None, filename="sampling_process.gif", final_name=None, duration=200, sampling_steps=None, model_kwargs=None, guidance_scale=None):
     vae = models["autoencoder"]
     model = models["denoiser"]
+    text_encoder = models.get("text_encoder", None)
     vae.eval()
     model.eval()
     device = diffusion.betas.device
@@ -352,6 +353,12 @@ def save_stable_diffusion_sampling_gif(models, diffusion, configs, num_samples=1
 
     if guidance_scale is None:
         guidance_scale = float(configs.get("conditioning", {}).get("cfg", {}).get("guidance_scale", 1.0))
+
+    if model_kwargs is None and text_encoder is not None:
+        null_text = configs.get("conditioning", {}).get("text", {}).get("null_text", "")
+        with torch.no_grad():
+            uncond_context = text_encoder.encode_text([null_text] * num_samples, device=device)
+        model_kwargs = {"context": uncond_context, "uncond_context": uncond_context}
 
     print("Stable diffusion sampling process visualization started...")
 
