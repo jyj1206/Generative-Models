@@ -1,10 +1,9 @@
 task: latent_diffusion
 
 run_time:
-  gpu_ids: [0]
+  gpu_ids: [0, 1, 2, 3]
 
 model:
-  type: ddpm
   autoencoder:
     type: vqgan
     reg_type: vq
