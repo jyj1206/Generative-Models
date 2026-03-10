@@ -106,7 +106,13 @@ def build_model(configs):
              raise ValueError(f"Unknown diffusion model: {model_type}")
     
     elif task == 'latent_diffusion':
-        if model_type in ['ddpm', 'ddim']:
+        denoiser_cfg = configs["model"]["denoiser"]
+        denoiser_type = denoiser_cfg.get("type", model_type)
+
+        if model_type != 'latent_diffusion':
+            raise ValueError(f"Unknown latent diffusion model type: {model_type}")
+
+        if denoiser_type in ['ddpm', 'ddim']:
             from models.Diffusion.nets.unet import UNet
 
             # Autoencoder
@@ -132,7 +138,6 @@ def build_model(configs):
                 raise ValueError(f"Unknown regularization type for autoencoder model: {reg_type}")
 
             # Denoiser UNet
-            denoiser_cfg = configs["model"]["denoiser"]
             denoiser =  UNet(
                     dim=int(denoiser_cfg["dim"]),
                     dim_mults=denoiser_cfg["dim_mults"],
@@ -177,7 +182,7 @@ def build_model(configs):
                 'text_encoder': text_encoder,
             }
         else:
-             raise ValueError(f"Unknown stable diffusion model: {model_type}")
+               raise ValueError(f"Unknown latent denoiser type: {denoiser_type}")
     
          
     else:
@@ -232,6 +237,10 @@ def build_loss_function(configs):
             loss_fn = None
         else:
             raise ValueError(f"Unknown diffusion model: {model_type}")
+
+    elif task == 'latent_diffusion':
+        # Latent diffusion loss is implemented in the scheduler/model training loop.
+        loss_fn = None
                 
     else:
         raise ValueError(f"Unknown model: {model_type}")
