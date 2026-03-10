@@ -98,7 +98,8 @@ class DDPMScheduler(GaussianDiffusion):
             out_cond, out_uncond = model_out.chunk(2, dim=0)
             pred_noise = out_uncond + guidance_scale * (out_cond - out_uncond)
         else:
-            pred_noise = model(x, t, **(model_kwargs or {}))   
+            forward_kwargs = {k: v for k, v in (model_kwargs or {}).items() if k != 'uncond_context'}
+            pred_noise = model(x, t, **forward_kwargs)
         
         model_mean, model_log_variance = self.p_mean_variance(x, t, pred_noise, clip_denoised=clip_denoised)
         noise = torch.randn_like(x)
