@@ -146,12 +146,16 @@ def load_vae_checkpoint(vae, configs, device):
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
 
         if isinstance(checkpoint, dict):
-            if "vqvae_state_dict" in checkpoint:
-                state_dict = checkpoint["vqvae_state_dict"]
-            elif all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
-                state_dict = checkpoint
-            else:
-                raise KeyError("Checkpoint must contain 'vqvae_state_dict'.")
+            state_dict = None
+            for key in ('vae_gan_state_dict', 'vqgan_state_dict'):
+                if key in checkpoint:
+                    state_dict = checkpoint[key]
+                    break
+            if state_dict is None:
+                if all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
+                    state_dict = checkpoint
+                else:
+                    raise KeyError("Checkpoint must contain 'vae_gan_state_dict' or 'vqgan_state_dict'.")
         else:
             state_dict = checkpoint
 

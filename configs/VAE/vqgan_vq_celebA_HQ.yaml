@@ -4,7 +4,7 @@ run_time:
   gpu_ids: [0]
 
 model:
-  type: vqvae
+  type: vqgan
   reg_type: vq
   disc_init_weights: false
   img_size: 256

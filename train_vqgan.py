@@ -13,15 +13,15 @@ from tqdm import tqdm
 
 from datasets.build import build_dataset
 from models.build import build_model, build_loss_function, build_optimizer
-from utils.util_visualization import save_loss_curve, save_vae_recon_grid, save_vqvae_latent
-from utils.util_save import save_vqvae_checkpoint
+from utils.util_visualization import save_loss_curve, save_vae_recon_grid, save_autoencoder_latent
+from utils.util_save import save_autoencoder_gan_checkpoint
 from utils.util_logger import setup_train_logger
 from utils.util_paths import build_output_dir
 from utils.util_ddp import set_visible_gpus, setup_runtime, cleanup_ddp, is_main
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train a VQ-VAE model (VQ regularization).")
+    parser = argparse.ArgumentParser(description="Train a VQGAN model.")
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--scale", type=int, default=4)
     parser.add_argument("--resume", type=str, default=None)
@@ -103,28 +103,28 @@ def compute_num_epochs(train_loader, configs):
 
 
 def load_resume_state(model, discriminator, optimizers, device, resume_path):
-    vqvae_checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
+    vqgan_checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
 
     resume_name = os.path.basename(resume_path)
-    if "vqvae_autoencoder" in resume_name:
-        disc_resume_path = resume_path.replace("vqvae_autoencoder", "vqvae_discriminator")
-    elif "vqvae_model" in resume_name:
-        disc_resume_path = resume_path.replace("vqvae_model", "discriminator_model")
+    if "vqgan_autoencoder" in resume_name:
+        disc_resume_path = resume_path.replace("vqgan_autoencoder", "vqgan_discriminator")
+    elif "vqgan_model" in resume_name:
+        disc_resume_path = resume_path.replace("vqgan_model", "discriminator_model")
     else:
-        raise ValueError("For VQ-VAE resume, pass an autoencoder checkpoint path (vqvae_autoencoder_*).")
+        raise ValueError("For VQGAN resume, pass an autoencoder checkpoint path (vqgan_autoencoder_*).")
 
     if not os.path.exists(disc_resume_path):
         raise FileNotFoundError(f"Matching discriminator checkpoint not found: {disc_resume_path}")
 
     disc_checkpoint = torch.load(disc_resume_path, map_location=device, weights_only=True)
 
-    unwrap_model(model).load_state_dict(vqvae_checkpoint["vqvae_state_dict"])
+    unwrap_model(model).load_state_dict(vqgan_checkpoint["vqgan_state_dict"])
     unwrap_model(discriminator).load_state_dict(disc_checkpoint["discriminator_state_dict"])
-    optimizers["optimizer_g"].load_state_dict(vqvae_checkpoint["optimizer_g_state_dict"])
+    optimizers["optimizer_g"].load_state_dict(vqgan_checkpoint["optimizer_g_state_dict"])
     optimizers["optimizer_d"].load_state_dict(disc_checkpoint["optimizer_d_state_dict"])
 
-    start_epoch = int(vqvae_checkpoint.get("epoch", 0))
-    iterations = int(vqvae_checkpoint.get("iterations", 0))
+    start_epoch = int(vqgan_checkpoint.get("epoch", 0))
+    iterations = int(vqgan_checkpoint.get("iterations", 0))
     return start_epoch, iterations
 
 
@@ -164,7 +164,7 @@ def main():
     recon_criterion = criterions["recon_criterion"]
     discriminator_criterion = criterions["discriminator_criterion"]
 
-    model = models["vqvae"].to(device)
+    model = models["vqgan"].to(device)
     lpips_model = models["lpips"].eval().to(device)
     lpips_model.requires_grad_(False)
     discriminator = models["discriminator"].to(device)
@@ -346,19 +346,20 @@ def main():
 
             if epoch % 5 == 0:
                 save_vae_recon_grid(model_to_use, configs, train_loader, device, epoch, train=True, scale=args.scale)
-                save_vqvae_latent(model_to_use, configs, train_loader, device, epoch, train=True, scale=args.scale)
+                save_autoencoder_latent(model_to_use, configs, train_loader, device, epoch, train=True, scale=args.scale)
 
                 if has_test_loader:
                     save_vae_recon_grid(model_to_use, configs, test_loader, device, epoch, train=False, scale=args.scale)
-                    save_vqvae_latent(model_to_use, configs, test_loader, device, epoch, train=False, scale=args.scale)
+                    save_autoencoder_latent(model_to_use, configs, test_loader, device, epoch, train=False, scale=args.scale)
 
-                save_vqvae_checkpoint(
+                save_autoencoder_gan_checkpoint(
                     models,
                     optimizers,
                     {"loss_g": avg_train_loss, "loss_d": avg_disc_train_loss},
                     configs,
                     epoch,
                     iterations,
+                    model_key='vqgan',
                 )
 
         last_avg_train_loss = avg_train_loss
@@ -369,7 +370,7 @@ def main():
 
         if has_test_loader:
             save_vae_recon_grid(model_to_use, configs, test_loader, device, train=False, scale=args.scale)
-            save_vqvae_latent(model_to_use, configs, test_loader, device, train=False, scale=args.scale)
+            save_autoencoder_latent(model_to_use, configs, test_loader, device, train=False, scale=args.scale)
 
         save_loss_curve(
             configs,
@@ -381,13 +382,14 @@ def main():
             x_history2=disc_loss_epochs,
         )
 
-        save_vqvae_checkpoint(
+        save_autoencoder_gan_checkpoint(
             models,
             optimizers,
             {"loss_g": last_avg_train_loss, "loss_d": last_avg_disc_train_loss},
             configs,
             num_epochs,
             iterations,
+            model_key='vqgan',
             final=True,
         )
 

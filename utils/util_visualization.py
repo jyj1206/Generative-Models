@@ -225,7 +225,7 @@ def save_vae_recon_grid(model, configs, dataloader, device, epoch=None, train=Fa
         plt.close()
 
 
-def save_vqvae_latent(model, configs, dataloader, device, epoch=None, train=False, scale=4):
+def save_autoencoder_latent(model, configs, dataloader, device, epoch=None, train=False, scale=4):
     with torch.no_grad():
         images, _ = next(iter(dataloader))
         images = images.to(device)

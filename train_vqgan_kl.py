@@ -1,0 +1,378 @@
+import os
+import shutil
+import math
+import argparse
+import yaml
+
+import torch
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
+from tqdm import tqdm
+
+from datasets.build import build_dataset
+from models.build import build_model, build_loss_function, build_optimizer
+from utils.util_visualization import save_loss_curve, save_vae_recon_grid, save_vqgan_latent
+from utils.util_save import save_vqgan_checkpoint
+from utils.util_logger import setup_train_logger
+from utils.util_paths import build_output_dir
+from utils.util_ddp import set_visible_gpus, setup_runtime, cleanup_ddp, is_main
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train a VQGAN model (KL regularization).")
+    parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--scale", type=int, default=4)
+    parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--resume_ema", type=str, default=None)
+    return parser.parse_args()
+
+
+def yaml_loader(configs_path):
+    with open(configs_path, "r") as f:
+        return yaml.safe_load(f)
+
+
+def unwrap_model(model):
+    return model.module if hasattr(model, "module") else model
+
+
+def prepare_output_dir(configs, config_path, resume_path):
+    run_name = os.path.splitext(os.path.basename(config_path))[0]
+    configs["run_name"] = run_name
+
+    if resume_path:
+        model_dir = os.path.dirname(os.path.abspath(resume_path))
+        output_dir = os.path.dirname(model_dir)
+    else:
+        output_dir = build_output_dir(configs, run_name)
+    configs["output_dir"] = output_dir
+
+    os.makedirs(os.path.join(output_dir, "checkpoints"), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "visualization", "train"), exist_ok=True)
+
+    config_dest = os.path.join(output_dir, os.path.basename(config_path))
+    try:
+        shutil.copyfile(config_path, config_dest)
+    except Exception as e:
+        print(f"Warning: Failed to copy config file: {e}")
+    return output_dir
+
+
+def build_dataloaders(configs):
+    batch_size = configs["train"]["batch_size"]
+    num_workers = configs["train"]["num_workers"]
+
+    train_dataset, test_dataset = build_dataset(configs)
+
+    sampler = None
+    if configs.get("distributed", False):
+        sampler = DistributedSampler(train_dataset, shuffle=True)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=(sampler is None),
+        num_workers=num_workers,
+        sampler=sampler,
+    )
+
+    test_loader = None
+    if test_dataset is not None:
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+        )
+
+    return train_loader, test_loader
+
+
+def compute_num_epochs(train_loader, configs):
+    steps_per_epoch = len(train_loader)
+    if steps_per_epoch == 0:
+        raise ValueError("Train dataloader returned zero batches. Check dataset setup.")
+
+    train_cfg = configs["train"]
+    if "iterations" in train_cfg:
+        iterations_target = int(train_cfg["iterations"])
+        return max(1, math.ceil(iterations_target / steps_per_epoch))
+    return int(train_cfg["epochs"])
+
+
+def load_resume_state(model, discriminator, optimizers, device, resume_path):
+    vqgan_checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
+
+    resume_name = os.path.basename(resume_path)
+    if "vqgan_autoencoder" in resume_name:
+        disc_resume_path = resume_path.replace("vqgan_autoencoder", "vqgan_discriminator")
+    elif "vqgan_model" in resume_name:
+        disc_resume_path = resume_path.replace("vqgan_model", "discriminator_model")
+    else:
+        raise ValueError("For VQGAN resume, pass an autoencoder checkpoint path (vqgan_autoencoder_*).")
+
+    if not os.path.exists(disc_resume_path):
+        raise FileNotFoundError(f"Matching discriminator checkpoint not found: {disc_resume_path}")
+
+    disc_checkpoint = torch.load(disc_resume_path, map_location=device, weights_only=True)
+
+    unwrap_model(model).load_state_dict(vqgan_checkpoint["vqgan_state_dict"])
+    unwrap_model(discriminator).load_state_dict(disc_checkpoint["discriminator_state_dict"])
+    optimizers["optimizer_g"].load_state_dict(vqgan_checkpoint["optimizer_g_state_dict"])
+    optimizers["optimizer_d"].load_state_dict(disc_checkpoint["optimizer_d_state_dict"])
+
+    start_epoch = int(vqgan_checkpoint.get("epoch", 0))
+    iterations = int(vqgan_checkpoint.get("iterations", 0))
+    return start_epoch, iterations
+
+
+def calculate_adaptive_weight(nll_loss, g_loss, disc_weight, last_layer):
+    nll_grads = torch.autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
+    g_grads = torch.autograd.grad(g_loss, last_layer, retain_graph=True)[0]
+
+    d_weight = torch.norm(nll_grads) / (torch.norm(g_grads) + 1e-4)
+    d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
+    d_weight = d_weight * disc_weight
+    return d_weight
+
+
+def main():
+    args = parse_args()
+    configs = yaml_loader(args.config)
+
+    set_visible_gpus(configs)
+    distributed, local_rank, device = setup_runtime()
+    configs["distributed"] = distributed
+
+    output_dir = prepare_output_dir(configs, args.config, args.resume)
+    logger = setup_train_logger(output_dir)
+
+    if is_main():
+        print(f"Logging to: {logger.log_path}")
+
+    train_loader, test_loader = build_dataloaders(configs)
+    has_test_loader = test_loader is not None
+
+    if has_test_loader:
+        os.makedirs(os.path.join(output_dir, "visualization", "test"), exist_ok=True)
+
+    models = build_model(configs)
+    criterions = build_loss_function(configs)
+    recon_criterion = criterions["recon_criterion"]
+    discriminator_criterion = criterions["discriminator_criterion"]
+
+    model = models["vqgan"].to(device)
+    lpips_model = models["lpips"].eval().to(device)
+    lpips_model.requires_grad_(False)
+    discriminator = models["discriminator"].to(device)
+
+    if distributed:
+        model = DDP(model, device_ids=[local_rank])
+        discriminator = DDP(discriminator, device_ids=[local_rank])
+
+    model_to_use = unwrap_model(model)
+    disc_for_g = unwrap_model(discriminator)
+
+    optimizers = build_optimizer(models, configs)
+    optimizer_g = optimizers["optimizer_g"]
+    optimizer_d = optimizers["optimizer_d"]
+
+    num_epochs = compute_num_epochs(train_loader, configs)
+
+    train_loss_history = []
+    disc_loss_history = []
+    disc_loss_epochs = []
+    test_loss_history = []
+
+    start_epoch = 0
+    iterations = 0
+    avg_train_loss = float("nan")
+    avg_disc_train_loss = float("nan")
+
+    if args.resume:
+        start_epoch, iterations = load_resume_state(model, discriminator, optimizers, device, args.resume)
+
+    kl_beta = float(configs["train"].get("kl_beta", configs["train"].get("beta", 0.1)))
+    perceptual_weight = float(configs["train"].get("perceptual_weight", 1.0))
+    disc_weight = float(configs["train"].get("disc_weight", 0.5))
+    disc_step_start = int(configs["train"].get("disc_step_start", 15000))
+    step_count = iterations
+
+    for epoch in range(start_epoch + 1, num_epochs + 1):
+        model.train()
+        discriminator.train()
+
+        model_train_loss_sum = 0.0
+        discriminator_train_loss_sum = 0.0
+
+        if distributed:
+            train_loader.sampler.set_epoch(epoch)
+
+        pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{num_epochs}]", disable=not is_main())
+
+        for inputs, _ in pbar:
+            inputs = inputs.to(device)
+
+            optimizer_g.zero_grad()
+            step_count += 1
+
+            outputs, kl_loss = model(inputs)
+
+            recon_loss = recon_criterion(outputs, inputs)
+            lpips_loss = torch.mean(lpips_model(outputs, inputs))
+            nll_loss = recon_loss + perceptual_weight * lpips_loss
+            regularization_loss = kl_beta * kl_loss
+
+            disc_factor = 1.0 if step_count >= disc_step_start else 0.0
+            g_loss = torch.zeros((), device=device)
+            d_weight = torch.tensor(0.0, device=device)
+
+            if disc_factor > 0.0:
+                disc_for_g.eval()
+                disc_for_g.requires_grad_(False)
+
+                disc_fake_pred = disc_for_g(outputs)
+                g_loss = discriminator_criterion.generator_loss(disc_fake_pred)
+                d_weight = calculate_adaptive_weight(
+                    nll_loss,
+                    g_loss,
+                    disc_weight,
+                    last_layer=model_to_use.decoder_conv_out.weight,
+                )
+
+                disc_for_g.requires_grad_(True)
+                disc_for_g.train()
+
+            loss = nll_loss + regularization_loss + d_weight * disc_factor * g_loss
+            loss.backward()
+            optimizer_g.step()
+
+            if disc_factor > 0.0:
+                optimizer_d.zero_grad()
+
+                disc_inputs = torch.cat([inputs, outputs.detach()], dim=0)
+                disc_preds = discriminator(disc_inputs)
+                disc_real_pred, disc_fake_pred = torch.chunk(disc_preds, 2, dim=0)
+                d_raw_loss = discriminator_criterion.discriminator_loss(disc_real_pred, disc_fake_pred)
+                d_loss = disc_factor * d_raw_loss
+
+                d_loss.backward()
+                optimizer_d.step()
+            else:
+                d_loss = torch.zeros((), device=device)
+
+            model_train_loss_sum += loss.item()
+            discriminator_train_loss_sum += d_loss.item()
+            iterations += 1
+
+            if is_main():
+                pbar.set_postfix({
+                    "loss_g": f"{loss.item():.6f}",
+                    "loss_d": f"{d_loss.item():.6f}",
+                    "iter": iterations,
+                })
+
+        avg_train_loss = model_train_loss_sum / len(train_loader)
+        avg_disc_train_loss = discriminator_train_loss_sum / len(train_loader)
+
+        avg_train_loss_tensor = torch.tensor(avg_train_loss, device=device)
+        avg_disc_train_loss_tensor = torch.tensor(avg_disc_train_loss, device=device)
+
+        if distributed:
+            torch.distributed.all_reduce(avg_train_loss_tensor, op=torch.distributed.ReduceOp.SUM)
+            avg_train_loss_tensor /= torch.distributed.get_world_size()
+
+            torch.distributed.all_reduce(avg_disc_train_loss_tensor, op=torch.distributed.ReduceOp.SUM)
+            avg_disc_train_loss_tensor /= torch.distributed.get_world_size()
+
+        avg_train_loss = avg_train_loss_tensor.item()
+        avg_disc_train_loss = avg_disc_train_loss_tensor.item()
+
+        train_loss_history.append(avg_train_loss)
+
+        if step_count >= disc_step_start:
+            disc_loss_history.append(avg_disc_train_loss)
+            disc_loss_epochs.append(epoch)
+
+        avg_test_loss = None
+
+        if has_test_loader and is_main():
+            model_to_use.eval()
+            test_loss_sum = 0.0
+
+            with torch.no_grad():
+                for test_inputs, _ in test_loader:
+                    test_inputs = test_inputs.to(device)
+                    test_outputs, test_kl_loss = model_to_use(test_inputs)
+
+                    test_recon_loss = recon_criterion(test_outputs, test_inputs)
+                    test_regularization_loss = kl_beta * test_kl_loss
+                    test_loss = test_recon_loss + test_regularization_loss
+
+                    test_loss_sum += test_loss.item()
+
+            avg_test_loss = test_loss_sum / len(test_loader)
+            test_loss_history.append(avg_test_loss)
+
+        log_message = (
+            f"Epoch [{epoch}/{num_epochs}] Done. "
+            f"| G Loss: {avg_train_loss:.6f} "
+            f"| D Loss: {avg_disc_train_loss:.6f}"
+        )
+
+        if avg_test_loss is not None:
+            log_message += f" | Test Loss: {avg_test_loss:.6f}"
+
+        if is_main():
+            print(log_message)
+
+            if epoch % 5 == 0:
+                save_vae_recon_grid(model_to_use, configs, train_loader, device, epoch, train=True, scale=args.scale)
+                save_vqgan_latent(model_to_use, configs, train_loader, device, epoch, train=True, scale=args.scale)
+
+                if has_test_loader:
+                    save_vae_recon_grid(model_to_use, configs, test_loader, device, epoch, train=False, scale=args.scale)
+                    save_vqgan_latent(model_to_use, configs, test_loader, device, epoch, train=False, scale=args.scale)
+
+                save_vqgan_checkpoint(
+                    models,
+                    optimizers,
+                    {"loss_g": avg_train_loss, "loss_d": avg_disc_train_loss},
+                    configs,
+                    epoch,
+                    iterations,
+                )
+
+    if is_main():
+        model_to_use.eval()
+
+        if has_test_loader:
+            save_vae_recon_grid(model_to_use, configs, test_loader, device, scale=args.scale)
+            save_vqgan_latent(model_to_use, configs, test_loader, device, train=False, scale=args.scale)
+
+        save_loss_curve(
+            configs,
+            train_loss_history,
+            disc_loss_history,
+            "Generator Loss",
+            "Discriminator Loss",
+            x_history1=list(range(start_epoch + 1, start_epoch + len(train_loss_history) + 1)),
+            x_history2=disc_loss_epochs,
+        )
+
+        save_vqgan_checkpoint(
+            models,
+            optimizers,
+            {"loss_g": avg_train_loss, "loss_d": avg_disc_train_loss},
+            configs,
+            num_epochs,
+            iterations,
+            final=True,
+        )
+
+    cleanup_ddp()
+
+
+if __name__ == "__main__":
+    main()

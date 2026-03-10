@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from models.VAE.nets.blocks import DownBlock, MidBlock, UpBlock
 
 
-class VQVAE(nn.Module):
+class VQGAN(nn.Module):
     def __init__(self, num_heads=4, groups=32, num_down_layers=2, num_mid_layers=2, num_up_layers=2,
                  z_channels=4, codebook_size=8192, in_channels=3):
         super().__init__()
@@ -174,7 +174,7 @@ class VQVAE(nn.Module):
         return out, quant_losses
 
 
-class VQVAEInterface(VQVAE):
+class VQGANInterface(VQGAN):
     def __init__(self, embed_dim, *args, **kwargs):
         kwargs.setdefault("z_channels", embed_dim)
         super().__init__(*args, **kwargs)

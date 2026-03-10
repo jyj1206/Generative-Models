@@ -55,17 +55,21 @@ def load_checkpoint(model, model_path, device):
 
 
 def load_vae_checkpoint(vae, checkpoint_path, device):
-    """Load VAE checkpoint for stable diffusion inference."""
+    """Load VAE/VQGAN checkpoint for inference."""
     if checkpoint_path is not None and os.path.exists(checkpoint_path):
         print(f"Loading VAE checkpoint from: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
         if isinstance(checkpoint, dict):
-            if "vqvae_state_dict" in checkpoint:
-                state_dict = checkpoint["vqvae_state_dict"]
-            elif all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
-                state_dict = checkpoint
-            else:
-                raise KeyError("Checkpoint must contain 'vqvae_state_dict'")
+            state_dict = None
+            for key in ('vae_gan_state_dict', 'vqgan_state_dict'):
+                if key in checkpoint:
+                    state_dict = checkpoint[key]
+                    break
+            if state_dict is None:
+                if all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
+                    state_dict = checkpoint
+                else:
+                    raise KeyError("Checkpoint must contain 'vae_gan_state_dict' or 'vqgan_state_dict'")
         else:
             state_dict = checkpoint
         vae.load_state_dict(state_dict)
@@ -97,11 +101,12 @@ def main():
     model = build_model(configs)
 
     # --- Load checkpoints based on task ---
-    if task == "vae" and configs["model"]["type"] == "vqvae":
-        vqvae = model['vqvae'].to(device)
-        load_vae_checkpoint(vqvae, args.model_path, device)
-        vqvae.eval()
-        generator = vqvae
+    model_type = configs["model"].get("type")
+    if task in ("vae_gan", "vqgan"):
+        autoencoder = model[model_type].to(device)
+        load_vae_checkpoint(autoencoder, args.model_path, device)
+        autoencoder.eval()
+        generator = autoencoder
 
     elif task == "latent_diffusion":
         vae = model['autoencoder'].to(device)
@@ -137,8 +142,8 @@ def main():
     if args.seed is not None:
         torch.manual_seed(args.seed)
 
-    # --- VQVAE reconstruction inference (early return) ---
-    if task == "vae" and configs["model"]["type"] == "vqvae":
+    # --- VQGAN / VAE-GAN reconstruction inference (early return) ---
+    if task in ("vae_gan", "vqgan"):
         timestamp = get_timestamp()
         start_time = time.perf_counter()
 
@@ -146,11 +151,11 @@ def main():
         train_dataset, _ = build_dataset(configs)
         recon_loader = DataLoader(train_dataset, batch_size=num_recon, shuffle=True, num_workers=0)
 
-        save_filename = append_timestamp("vqvae_reconstruction.png", timestamp)
+        save_filename = append_timestamp(f"{model_type}_reconstruction.png", timestamp)
         save_vae_recon_grid(generator, configs, recon_loader, device, scale=args.scale, num_samples=num_recon)
 
         elapsed = time.perf_counter() - start_time
-        print(f"Saved VQVAE reconstruction to: {os.path.join(configs['output_dir'], 'visualization')}")
+        print(f"Saved {model_type} reconstruction to: {os.path.join(configs['output_dir'], 'visualization')}")
         print(f"Inference time: {elapsed:.3f} sec")
         return
 

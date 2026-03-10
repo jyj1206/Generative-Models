@@ -15,7 +15,7 @@ def build_model(configs):
     task = configs["task"]
     model_type = configs["model"].get("type", configs["model"].get("denoiser", {}).get("type", None))
 
-    if task == 'vae':
+    if task in ('vae', 'vae_gan', 'vqgan'):
         if model_type == "vanila_vae":
             from models.VAE.nets.vanila_vae import VanillaVAE
             from models.VAE.nets.encoder.vanila_encoder import Encoder
@@ -31,27 +31,16 @@ def build_model(configs):
                 img_size=int(configs["model"]["img_size"]),
             )
             model = VanillaVAE(encoder, decoder, int(configs["model"]["latent_dim"]))
-        elif model_type == "vqvae":
-            reg_type = configs["model"].get("reg_type", "vq")
+        elif model_type == "vae_gan":
             disc_init_weights = bool(configs["model"].get("disc_init_weights", False))
-            from models.VAE.nets.vqvae import VQVAE
-            from models.VAE.nets.vae import VAE
+            from models.VAE_GAN.nets.vae_gan import VAE
             from models.others.lpips import LPIPS
             from models.GAN.nets.discriminator.patch_gan_discriminator import PatchGANDiscriminator
             
-            if reg_type == "vq":
-                autoencoder = VQVAE(
-                    in_channels=int(configs["model"]['in_channels']),
-                    z_channels=int(configs["model"]["latent_dim"]),
-                    codebook_size=int(configs["model"]["num_embeddings"]),
-                )
-            elif reg_type == "kl":
-                autoencoder = VAE(
-                    in_channels=int(configs["model"]['in_channels']),
-                    z_channels=int(configs["model"]["latent_dim"]),
-                )
-            else:
-                raise ValueError(f"Unknown regularization type for vqvae model: {reg_type}")
+            autoencoder = VAE(
+                in_channels=int(configs["model"]['in_channels']),
+                z_channels=int(configs["model"]["latent_dim"]),
+            )
 
             discriminator = PatchGANDiscriminator(
                     in_channels=int(configs["model"]['in_channels']),
@@ -59,7 +48,29 @@ def build_model(configs):
             )
             
             model = {
-                'vqvae': autoencoder,
+                'vae_gan': autoencoder,
+                'lpips': LPIPS(),
+                'discriminator': discriminator
+            }
+        elif model_type == "vqgan":
+            disc_init_weights = bool(configs["model"].get("disc_init_weights", False))
+            from models.VAE_GAN.nets.vqgan import VQGAN
+            from models.others.lpips import LPIPS
+            from models.GAN.nets.discriminator.patch_gan_discriminator import PatchGANDiscriminator
+            
+            autoencoder = VQGAN(
+                in_channels=int(configs["model"]['in_channels']),
+                z_channels=int(configs["model"]["latent_dim"]),
+                codebook_size=int(configs["model"]["num_embeddings"]),
+            )
+
+            discriminator = PatchGANDiscriminator(
+                    in_channels=int(configs["model"]['in_channels']),
+                    init_weights=disc_init_weights,
+            )
+            
+            model = {
+                'vqgan': autoencoder,
                 'lpips': LPIPS(),
                 'discriminator': discriminator
             }
@@ -120,16 +131,16 @@ def build_model(configs):
             autoencoder_cfg = configs["model"]["autoencoder"]
 
             if reg_type == "vq":
-                from models.VAE.nets.vqvae import VQVAEInterface
+                from models.VAE_GAN.nets.vqgan import VQGANInterface
                 latent_dim = int(autoencoder_cfg.get("latent_dim", configs["model"]["denoiser"]["in_channels"]))
-                autoencoder = VQVAEInterface(
+                autoencoder = VQGANInterface(
                     embed_dim=latent_dim,
                     in_channels=int(autoencoder_cfg.get("in_channels", 3)),
                     z_channels=latent_dim,
                     codebook_size=int(autoencoder_cfg.get("num_embeddings", 8192)),
                 )
             elif reg_type == "kl":
-                from models.VAE.nets.vae import VAE
+                from models.VAE_GAN.nets.vae_gan import VAE
                 autoencoder = VAE(
                     in_channels=int(autoencoder_cfg.get('in_channels', 3)),
                     z_channels=int(autoencoder_cfg["latent_dim"]),
@@ -203,7 +214,7 @@ def build_loss_function(configs):
     loss_type = configs["train"].get('loss_fn', None)
     model_type = configs["model"].get("type", configs["model"].get("denoiser", {}).get("type", None))
     
-    if task == 'vae':
+    if task in ('vae', 'vae_gan', 'vqgan'):
         if model_type == 'vanila_vae':
             beta = float(configs["train"].get("beta", 0.1))
             warmup_epochs = int(configs["train"].get("kl_warmup_epochs", 0))
@@ -219,7 +230,7 @@ def build_loss_function(configs):
             else:
                 raise ValueError(f"Unknown loss function: {loss_type}")
             
-        elif model_type == 'vqvae':
+        elif model_type in ('vae_gan', 'vqgan'):
             loss_fn = {
                 'recon_criterion': torch.nn.MSELoss(),
                 'discriminator_criterion': HingeAdversarialLoss(),
@@ -262,9 +273,9 @@ def build_optimizer(model, configs):
     weight_decay = float(configs["train"].get("weight_decay", 0))
     adam_betas = (float(configs["train"].get("beta1", 0.9)), float(configs["train"].get("beta2", 0.999)))
     
-    if model_type == 'vqvae':
+    if model_type in ('vae_gan', 'vqgan'):
         optimizer = {
-            'optimizer_g': torch.optim.Adam(model['vqvae'].parameters(), lr=learning_rate, betas=adam_betas),
+            'optimizer_g': torch.optim.Adam(model[model_type].parameters(), lr=learning_rate, betas=adam_betas),
             'optimizer_d': torch.optim.Adam(model['discriminator'].parameters(), lr=learning_rate, betas=adam_betas)
         }
     else:

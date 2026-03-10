@@ -1,11 +1,10 @@
-task: vae
+task: vae_gan
 
 run_time:
   gpu_ids: [1]
   
 model:
-  type: vqvae
-  reg_type: kl
+  type: vae_gan
   disc_init_weights: false
   img_size: 256
   in_channels: 3
