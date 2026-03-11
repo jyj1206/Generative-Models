@@ -127,10 +127,10 @@ def build_model(configs):
             from models.Diffusion.nets.unet import UNet
 
             # Autoencoder
-            reg_type = configs["model"]["autoencoder"].get("reg_type", "vq")
             autoencoder_cfg = configs["model"]["autoencoder"]
+            autoencoder_type = autoencoder_cfg.get("type", "vqgan")
 
-            if reg_type == "vq":
+            if autoencoder_type == "vqgan":
                 from models.VAE_GAN.nets.vqgan import VQGANInterface
                 latent_dim = int(autoencoder_cfg.get("latent_dim", configs["model"]["denoiser"]["in_channels"]))
                 autoencoder = VQGANInterface(
@@ -139,14 +139,14 @@ def build_model(configs):
                     z_channels=latent_dim,
                     codebook_size=int(autoencoder_cfg.get("num_embeddings", 8192)),
                 )
-            elif reg_type == "kl":
+            elif autoencoder_type == "vae_gan":
                 from models.VAE_GAN.nets.vae_gan import VAE
                 autoencoder = VAE(
                     in_channels=int(autoencoder_cfg.get('in_channels', 3)),
                     z_channels=int(autoencoder_cfg["latent_dim"]),
                 )
             else:
-                raise ValueError(f"Unknown regularization type for autoencoder model: {reg_type}")
+                raise ValueError(f"Unknown autoencoder type: {autoencoder_type}")
 
             # Conditioning config — build text encoder first so we can get context_dim
             conditioning_cfg = configs.get("conditioning", {})
