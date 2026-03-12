@@ -227,10 +227,16 @@ def main():
         if is_main():
             print("Computing latent scaling factor...")
             with torch.no_grad():
-                sample_batch = next(iter(train_loader))[0][:min(16, len(train_loader.dataset))].to(device)
-                sample_latent = vae_to_use.encode(sample_batch)
-                if isinstance(sample_latent, (tuple, list)):
-                    sample_latent = sample_latent[0]
+                sample_batch = next(iter(train_loader))[0]
+                sub_batch_size = 8
+                latent_chunks = []
+                for i in range(0, len(sample_batch), sub_batch_size):
+                    chunk = sample_batch[i:i + sub_batch_size].to(device)
+                    latent = vae_to_use.encode(chunk)
+                    if isinstance(latent, (tuple, list)):
+                        latent = latent[0]
+                    latent_chunks.append(latent.cpu())
+                sample_latent = torch.cat(latent_chunks, dim=0)
                 std_val = sample_latent.std().item()
                 print(f"Sample latent shape: {sample_latent.shape}, std: {std_val:.4f}")
                 scale_factor = 1.0 / std_val
