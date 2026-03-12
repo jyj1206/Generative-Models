@@ -6,10 +6,10 @@ run_time:
 model:
   type: latent_diffusion
   autoencoder:
-    type: vqgan
+    type: vae_gan
     img_size: 256
     latent_dim: 4
-    checkpoint_path: output/vae_gan/vae_gan_celebA_HQ_*/checkpoints/vae_gan_autoencoder_final.pth
+    checkpoint_path: output/vae_gan/vae_gan_celebA_HQ_03111055/checkpoints/vae_gan_autoencoder_final.pth
   denoiser:
     type: ddpm
     img_size: 32
@@ -22,26 +22,13 @@ model:
     use_biggan_resample: false
 
 conditioning:
-  type: text
-  text:
-    encoder: bert
-    pretrained_model_name: bert-base-uncased
-    max_length: 77
-    freeze: true
-    null_text: ""
-  cfg:
-    enabled: True
-    p_uncond: 0.1
-    guidance_scale: 3.0
+  type: none
 
 dataset:
   name: custom
   root: ./data/CelebA-HQ-img
   in_channels: 3
   img_size: 256
-
-  text:
-    root: ./data/celeba_caption
 
 train:
   iterations: 300000

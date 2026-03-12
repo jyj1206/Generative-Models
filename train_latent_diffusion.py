@@ -164,7 +164,10 @@ def load_vae_checkpoint(vae, configs, device):
         for param in vae.parameters():
             param.requires_grad = False
     else:
-        raise ValueError(f"VAE checkpoint not found at: {checkpoint_path}")
+        if checkpoint_path is not None:
+            print(f"WARNING: VAE checkpoint not found at: {checkpoint_path}. Using randomly initialized VAE.")
+        else:
+            print("WARNING: No checkpoint_path specified. Using randomly initialized VAE.")
 
     return vae
 
