@@ -144,7 +144,7 @@ def load_vae_checkpoint(vae, configs, device):
     if checkpoint_path is not None and os.path.exists(checkpoint_path):
         if is_main():
             print(f"Loading VAE checkpoint from: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
         if isinstance(checkpoint, dict):
             state_dict = None
