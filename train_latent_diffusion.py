@@ -142,7 +142,8 @@ def load_vae_checkpoint(vae, configs, device):
     checkpoint_path = configs["model"]["autoencoder"].get("checkpoint_path", None)
 
     if checkpoint_path is not None and os.path.exists(checkpoint_path):
-        print(f"Loading VAE checkpoint from: {checkpoint_path}")
+        if is_main():
+            print(f"Loading VAE checkpoint from: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
         if isinstance(checkpoint, dict):
