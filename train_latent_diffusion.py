@@ -142,8 +142,9 @@ def load_vae_checkpoint(vae, configs, device):
     checkpoint_path = configs["model"]["autoencoder"].get("checkpoint_path", None)
 
     if checkpoint_path is not None and os.path.exists(checkpoint_path):
-        print(f"Loading VAE checkpoint from: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        if is_main():
+            print(f"Loading VAE checkpoint from: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
 
         if isinstance(checkpoint, dict):
             state_dict = None
@@ -164,10 +165,7 @@ def load_vae_checkpoint(vae, configs, device):
         for param in vae.parameters():
             param.requires_grad = False
     else:
-        if checkpoint_path is not None:
-            print(f"WARNING: VAE checkpoint not found at: {checkpoint_path}. Using randomly initialized VAE.")
-        else:
-            print("WARNING: No checkpoint_path specified. Using randomly initialized VAE.")
+        raise ValueError(f"VAE checkpoint not found at: {checkpoint_path}")
 
     return vae
 
