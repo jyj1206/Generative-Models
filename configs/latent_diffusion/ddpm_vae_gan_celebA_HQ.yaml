@@ -6,7 +6,7 @@ run_time:
 model:
   type: latent_diffusion
   autoencoder:
-    type: vqgan
+    type: vae_gan
     img_size: 256
     latent_dim: 4
     checkpoint_path: output/vae_gan/vae_gan_celebA_HQ_03111055/checkpoints/vae_gan_autoencoder_final.pth
