@@ -226,7 +226,7 @@ def main():
         if is_main():
             print("Computing latent scaling factor...")
             with torch.no_grad():
-                sample_batch = next(iter(train_loader))[0][:min(64, len(train_loader.dataset))].to(device)
+                sample_batch = next(iter(train_loader))[0][:min(16, len(train_loader.dataset))].to(device)
                 sample_latent = vae_to_use.encode(sample_batch)
                 if isinstance(sample_latent, (tuple, list)):
                     sample_latent = sample_latent[0]
